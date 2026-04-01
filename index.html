@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TennisPro — Analisi Pronostici Tennis</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎾</text></svg>">
+</head>
+<body>
+
+  <!-- ========== HEADER ========== -->
+  <header class="header">
+    <div class="header-inner">
+      <a href="#" class="logo">
+        <div class="logo-icon">🎾</div>
+        <div class="logo-text">Tennis<span>Pro</span></div>
+      </a>
+      <div class="header-date" id="headerDate"></div>
+    </div>
+  </header>
+
+  <!-- ========== NAV TABS ========== -->
+  <nav class="nav-tabs" id="navTabs">
+    <button class="nav-tab active" data-tab="matches">
+      📊 Partite del Giorno
+    </button>
+    <button class="nav-tab" data-tab="live">
+      ⚡ Live Score
+      <span class="tab-badge" id="liveCount" style="display:none">0</span>
+    </button>
+    <button class="nav-tab" data-tab="h2h">
+      🔄 Head-to-Head
+    </button>
+    <button class="nav-tab" data-tab="rankings">
+      🏆 Classifiche
+    </button>
+  </nav>
+
+  <!-- ========== MAIN ========== -->
+  <main class="main">
+
+    <!-- ===== TAB: Partite del Giorno ===== -->
+    <section class="tab-content active" id="tab-matches">
+      <div class="section-header">
+        <h2 class="section-title">
+          <span class="icon">📊</span> Pronostici del Giorno
+        </h2>
+        <div class="date-selector" id="dateSelector">
+          <button class="date-btn" data-offset="-1">Ieri</button>
+          <button class="date-btn active" data-offset="0">Oggi</button>
+          <button class="date-btn" data-offset="1">Domani</button>
+        </div>
+      </div>
+
+      <div class="filter-bar" id="matchFilters">
+        <button class="filter-btn active" data-filter="all">Tutti</button>
+        <button class="filter-btn" data-filter="atp">ATP</button>
+        <button class="filter-btn" data-filter="wta">WTA</button>
+        <button class="filter-btn" data-filter="challenger">Challenger</button>
+        <select class="filter-select" id="tierFilter">
+          <option value="all">Tutti i Tier</option>
+          <option value="gold">🥇 Solo Gold</option>
+          <option value="silver">🥈 Gold + Silver</option>
+          <option value="bronze">🥉 Gold + Silver + Bronze</option>
+        </select>
+      </div>
+
+      <div class="match-grid" id="matchesContainer">
+        <div class="loading-state">
+          <div class="loading-spinner"></div>
+          <p>Caricamento partite...</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== TAB: Live Score ===== -->
+    <section class="tab-content" id="tab-live">
+      <div class="section-header">
+        <h2 class="section-title">
+          <span class="icon">⚡</span> Live Score
+        </h2>
+        <div class="filter-bar">
+          <button class="filter-btn active" data-live-filter="all">Tutti</button>
+          <button class="filter-btn" data-live-filter="atp">ATP</button>
+          <button class="filter-btn" data-live-filter="wta">WTA</button>
+        </div>
+      </div>
+
+      <div class="match-grid" id="liveContainer">
+        <div class="loading-state">
+          <div class="loading-spinner"></div>
+          <p>Caricamento live score...</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== TAB: Head-to-Head ===== -->
+    <section class="tab-content" id="tab-h2h">
+      <div class="section-header">
+        <h2 class="section-title">
+          <span class="icon">🔄</span> Head-to-Head
+        </h2>
+      </div>
+
+      <div class="h2h-search" id="h2hSearch">
+        <div class="input-group">
+          <label>Giocatore 1</label>
+          <input type="text" id="h2hPlayer1" placeholder="Nome giocatore..." autocomplete="off">
+          <div class="player-suggestions" id="suggestions1"></div>
+        </div>
+        <div class="input-group">
+          <label>Giocatore 2</label>
+          <input type="text" id="h2hPlayer2" placeholder="Nome giocatore..." autocomplete="off">
+          <div class="player-suggestions" id="suggestions2"></div>
+        </div>
+        <button class="btn-primary" id="h2hBtn" onclick="TennisPro.loadH2H()">
+          Confronta
+        </button>
+      </div>
+
+      <!-- H2H shortcut: clickable from match cards -->
+      <div id="h2hResultContainer">
+        <div class="empty-state">
+          <div class="empty-icon">🔄</div>
+          <div class="empty-title">Cerca un Head-to-Head</div>
+          <p class="empty-text">Inserisci due giocatori oppure clicca "H2H" da una partita per vedere il confronto diretto.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== TAB: Classifiche ===== -->
+    <section class="tab-content" id="tab-rankings">
+      <div class="section-header">
+        <h2 class="section-title">
+          <span class="icon">🏆</span> Classifiche
+        </h2>
+        <div class="filter-bar">
+          <button class="filter-btn active" data-ranking="atp">ATP Singles</button>
+          <button class="filter-btn" data-ranking="wta">WTA Singles</button>
+        </div>
+      </div>
+
+      <div id="rankingsContainer">
+        <div class="loading-state">
+          <div class="loading-spinner"></div>
+          <p>Caricamento classifiche...</p>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ========== FOOTER ========== -->
+  <footer style="text-align:center; padding:2rem; color:var(--text-dim); font-size:0.75rem; border-top:1px solid var(--border);">
+    <p>TennisPro v1.0 — Analisi statistica a scopo informativo. Non costituisce consulenza finanziaria.</p>
+    <p style="margin-top:4px;">© 2026 TennisPro · Dati forniti da API-Tennis.com</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
