@@ -2,7 +2,7 @@
  * TennisPro v3.0 — app.js
  * 8-Model Prediction Engine + Consensus + Regression + Trap Detector + Kelly
  */
-const TP = (() => {
+const TP = window.TP = (() => {
 
   const CFG = {
     WORKER: 'https://tennispro.lucalagan.workers.dev',
@@ -68,7 +68,7 @@ const TP = (() => {
   function closeModal() { document.getElementById('modalOverlay').classList.remove('open'); document.body.style.overflow = ''; }
 
   async function openMatch(ek) {
-    const match = S.matches.find(m => m.event_key === ek);
+    const match = S.matches.find(m => String(m.eventkey) === String(ek));
     if (!match) return;
     document.body.style.overflow = 'hidden';
     const ov = document.getElementById('modalOverlay'), ct = document.getElementById('modalContent');
