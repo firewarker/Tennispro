@@ -1,938 +1,759 @@
 /**
- * TennisPro — app.js v1.0
- * Prediction Engine + API Integration + UI Logic
+ * TennisPro v3.0 — app.js
+ * 8-Model Prediction Engine + Consensus + Regression + Trap Detector + Kelly
  */
+const TP = (() => {
 
-const TennisPro = (() => {
-
-  // ─── Configuration ───
-  const CONFIG = {
-    // WORKER_URL: 'https://tennispro-api.YOUR_SUBDOMAIN.workers.dev',
-    // Durante sviluppo, chiamate dirette:
-    WORKER_URL: 'https://tennispro.lucalagan.workers.dev',
-    DIRECT_API: 'https://api.api-tennis.com/tennis/',
-    API_KEY: '4e2024edac52697afb5f6016f7cc98b24956bf9e45e6491f105593e740174678',
-    USE_WORKER: true, // toggle: true = worker proxy, false = direct API
-    LIVE_INTERVAL: 30000, // 30s refresh live
-    TIMEZONE: 'Europe/Rome',
-    // Event type keys for filtering
-    EVENT_TYPES: {
-      ATP_SINGLES: '265',
-      WTA_SINGLES: '266',
-      ATP_DOUBLES: '267',
-      WTA_DOUBLES: '268',
-      CHALLENGER_SINGLES: '281',
-      CHALLENGER_DOUBLES: '282',
-      ITF_MEN: '269',
-      ITF_WOMEN: '270',
-    }
+  const CFG = {
+    WORKER: 'https://tennispro.lucalagan.workers.dev',
+    LIVE_MS: 30000,
+    WEIGHTS: { elo: 0.18, surface: 0.14, form: 0.16, h2h: 0.12, dominance: 0.10, serve: 0.10, fatigue: 0.08, odds: 0.12 },
+    GAMES_PER_SET: { clay: 10.2, grass: 9.6, hard: 9.8, indoor: 9.7, unknown: 9.9 },
+    EVENT: { ATP: '265', WTA: '266', CHALLENGER: '281' },
   };
 
-  // ─── State ───
-  let state = {
-    currentTab: 'matches',
-    selectedDate: 0, // offset from today
-    matchFilter: 'all',
-    tierFilter: 'all',
-    liveFilter: 'all',
-    rankingType: 'atp',
-    liveInterval: null,
-    allMatches: [],
-    liveMatches: [],
-    h2hPlayer1Key: null,
-    h2hPlayer2Key: null,
-    playersCache: {},
-    oddsCache: {},
+  let S = {
+    tab: 'matches', dateOff: 0, filter: 'all', liveFilter: 'all', rankType: 'atp',
+    liveInt: null, matches: [], live: [], h2hCache: {}, oddsCache: {},
+    h2hP1Key: null, h2hP2Key: null,
   };
 
-  // ─── Initialize ───
+  // ═══════ INIT ═══════
   function init() {
-    setupDate();
-    setupTabs();
-    setupDateSelector();
-    setupFilters();
+    setDate();
+    document.querySelectorAll('.nav-tab').forEach(t => t.addEventListener('click', () => switchTab(t.dataset.tab)));
+    document.querySelectorAll('.date-btn').forEach(b => b.addEventListener('click', () => { document.querySelectorAll('.date-btn').forEach(x => x.classList.remove('active')); b.classList.add('active'); S.dateOff = +b.dataset.offset; loadMatches(); }));
+    document.querySelectorAll('[data-filter]').forEach(b => b.addEventListener('click', () => { document.querySelectorAll('[data-filter]').forEach(x => x.classList.remove('active')); b.classList.add('active'); S.filter = b.dataset.filter; renderTournaments(); }));
+    document.querySelectorAll('[data-live-filter]').forEach(b => b.addEventListener('click', () => { document.querySelectorAll('[data-live-filter]').forEach(x => x.classList.remove('active')); b.classList.add('active'); S.liveFilter = b.dataset.liveFilter; renderLive(); }));
+    document.querySelectorAll('[data-ranking]').forEach(b => b.addEventListener('click', () => { document.querySelectorAll('[data-ranking]').forEach(x => x.classList.remove('active')); b.classList.add('active'); S.rankType = b.dataset.ranking; loadRankings(); }));
+    document.getElementById('modalOverlay').addEventListener('click', e => { if (e.target.id === 'modalOverlay') closeModal(); });
+    document.getElementById('modalClose').addEventListener('click', closeModal);
     loadMatches();
     loadRankings();
   }
 
-  // ─── Date Utilities ───
-  function setupDate() {
-    const now = new Date();
-    const options = { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' };
-    document.getElementById('headerDate').textContent = now.toLocaleDateString('it-IT', options);
+  function setDate() {
+    document.getElementById('headerDate').textContent = new Date().toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
   }
 
-  function getDateString(offset = 0) {
-    const d = new Date();
-    d.setDate(d.getDate() + offset);
-    return d.toISOString().split('T')[0];
+  function dateStr(off = 0) { const d = new Date(); d.setDate(d.getDate() + off); return d.toISOString().split('T')[0]; }
+
+  function switchTab(id) {
+    S.tab = id;
+    document.querySelectorAll('.nav-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === id));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.toggle('active', c.id === `tab-${id}`));
+    if (id === 'live') startLive(); else stopLive();
+    if (id === 'rankings') loadRankings();
   }
 
-  // ─── API Calls ───
-  async function apiCall(method, params = {}) {
+  // ═══════ API ═══════
+  async function api(method, params = {}) {
     try {
-      if (CONFIG.USE_WORKER) {
-        // Use Worker proxy
-        let path = '';
-        const queryParams = new URLSearchParams();
-
-        switch (method) {
-          case 'get_fixtures':
-            path = 'fixtures/' + (params.date_start || getDateString());
-            if (params.event_type_key) queryParams.set('event_type_key', params.event_type_key);
-            break;
-          case 'get_livescore':
-            path = 'livescore';
-            break;
-          case 'get_H2H':
-            path = 'h2h';
-            queryParams.set('p1', params.first_player_key);
-            queryParams.set('p2', params.second_player_key);
-            break;
-          case 'get_standings':
-            path = 'standings';
-            if (params.event_type_key) queryParams.set('event_type_key', params.event_type_key);
-            break;
-          case 'get_players':
-            path = 'players';
-            if (params.player_key) queryParams.set('player_key', params.player_key);
-            break;
-          case 'get_odds':
-            path = 'odds';
-            if (params.match_key) queryParams.set('match_key', params.match_key);
-            break;
-          case 'get_events':
-            path = 'events';
-            break;
-          case 'get_tournaments':
-            path = 'tournaments';
-            break;
-          default:
-            path = 'api';
-            queryParams.set('method', method);
-            Object.entries(params).forEach(([k, v]) => queryParams.set(k, v));
-        }
-
-        const qs = queryParams.toString();
-        const url = `${CONFIG.WORKER_URL}/${path}${qs ? '?' + qs : ''}`;
-        const resp = await fetch(url);
-        return await resp.json();
-
-      } else {
-        // Direct API call
-        const queryParams = new URLSearchParams({
-          method,
-          APIkey: CONFIG.API_KEY,
-          timezone: CONFIG.TIMEZONE,
-          ...params,
-        });
-        const resp = await fetch(`${CONFIG.DIRECT_API}?${queryParams}`);
-        return await resp.json();
+      let path = '', qp = new URLSearchParams();
+      switch (method) {
+        case 'fixtures': path = `fixtures/${params.date || dateStr()}`; if (params.etk) qp.set('event_type_key', params.etk); break;
+        case 'livescore': path = 'livescore'; break;
+        case 'h2h': path = 'h2h'; qp.set('p1', params.p1); qp.set('p2', params.p2); break;
+        case 'standings': path = 'standings'; if (params.etk) qp.set('event_type_key', params.etk); break;
+        case 'odds': path = 'odds'; if (params.mk) qp.set('match_key', params.mk); break;
+        default: path = 'api'; qp.set('method', method); Object.entries(params).forEach(([k, v]) => qp.set(k, v));
       }
-    } catch (err) {
-      console.error(`API Error [${method}]:`, err);
-      return { success: 0, result: [], error: err.message };
-    }
+      const qs = qp.toString();
+      const r = await fetch(`${CFG.WORKER}/${path}${qs ? '?' + qs : ''}`);
+      return await r.json();
+    } catch (e) { console.error('API:', e); return { success: 0, result: [] }; }
   }
 
-  // ─── Tab Management ───
-  function setupTabs() {
-    document.querySelectorAll('.nav-tab').forEach(tab => {
-      tab.addEventListener('click', () => {
-        const tabId = tab.dataset.tab;
-        switchTab(tabId);
-      });
-    });
+  // ═══════ MODAL ═══════
+  function closeModal() { document.getElementById('modalOverlay').classList.remove('open'); document.body.style.overflow = ''; }
+
+  async function openMatch(ek) {
+    const match = S.matches.find(m => m.event_key === ek);
+    if (!match) return;
+    document.body.style.overflow = 'hidden';
+    const ov = document.getElementById('modalOverlay'), ct = document.getElementById('modalContent');
+    ov.classList.add('open');
+    ct.innerHTML = `<div class="modal-loading"><div class="loading-spinner"></div><p>🧠 Analisi in corso...</p><p class="modal-loading-sub">Caricamento H2H · Quote · Statistiche</p></div>`;
+
+    const [h2h, odds] = await Promise.all([getH2H(match.first_player_key, match.second_player_key), getOdds(match.event_key)]);
+    const analysis = runEngine(match, h2h, odds);
+    ct.innerHTML = renderAnalysis(match, analysis, h2h);
+    ct.scrollTop = 0;
   }
 
-  function switchTab(tabId) {
-    state.currentTab = tabId;
-
-    document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
-    document.querySelector(`[data-tab="${tabId}"]`).classList.add('active');
-
-    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-    document.getElementById(`tab-${tabId}`).classList.add('active');
-
-    // Load data for tab
-    if (tabId === 'live') startLiveUpdates();
-    else stopLiveUpdates();
-
-    if (tabId === 'rankings') loadRankings();
-  }
-
-  // ─── Date Selector ───
-  function setupDateSelector() {
-    document.querySelectorAll('.date-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        document.querySelectorAll('.date-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        state.selectedDate = parseInt(btn.dataset.offset);
-        loadMatches();
-      });
-    });
-  }
-
-  // ─── Filters ───
-  function setupFilters() {
-    // Match category filters
-    document.querySelectorAll('[data-filter]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        document.querySelectorAll('[data-filter]').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        state.matchFilter = btn.dataset.filter;
-        renderMatches();
-      });
-    });
-
-    // Tier filter
-    document.getElementById('tierFilter').addEventListener('change', (e) => {
-      state.tierFilter = e.target.value;
-      renderMatches();
-    });
-
-    // Live filters
-    document.querySelectorAll('[data-live-filter]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        document.querySelectorAll('[data-live-filter]').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        state.liveFilter = btn.dataset.liveFilter;
-        renderLive();
-      });
-    });
-
-    // Ranking type
-    document.querySelectorAll('[data-ranking]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        document.querySelectorAll('[data-ranking]').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        state.rankingType = btn.dataset.ranking;
-        loadRankings();
-      });
-    });
-  }
-
-  // ════════════════════════════════════════════
-  //  PREDICTION ENGINE
-  // ════════════════════════════════════════════
-
-  /**
-   * Multi-factor tennis prediction model.
-   * Factors:
-   *  1. Ranking Gap (weight: 25%)
-   *  2. Recent Form — last 5 matches (weight: 25%)
-   *  3. H2H Record (weight: 20%)
-   *  4. Surface Affinity (weight: 15%)
-   *  5. Odds Value Detection (weight: 15%)
-   *
-   * Returns: { prediction, confidence, tier, factors, valueBet }
-   */
-  function predictMatch(match, h2hData = null, odds = null) {
-    const factors = {};
-    let totalScore = 50; // neutral starting point
-    let dataPoints = 0;
-
-    // --- Factor 1: Ranking Gap ---
-    const rank1 = extractRank(match, 'first');
-    const rank2 = extractRank(match, 'second');
-
-    if (rank1 && rank2) {
-      const rankDiff = rank2 - rank1; // positive = P1 higher ranked
-      const rankFactor = sigmoid(rankDiff / 50) * 100;
-      factors.ranking = {
-        label: 'Ranking',
-        p1: `#${rank1}`,
-        p2: `#${rank2}`,
-        score: rankFactor,
-        impact: rankFactor > 50 ? 'P1' : 'P2',
-      };
-      totalScore += (rankFactor - 50) * 0.25;
-      dataPoints++;
-    } else {
-      factors.ranking = { label: 'Ranking', p1: 'N/D', p2: 'N/D', score: 50, impact: '-' };
-    }
-
-    // --- Factor 2: Recent Form ---
-    // We extract form from H2H data's individual results if available
-    if (h2hData) {
-      const p1Results = h2hData.firstPlayerResults || [];
-      const p2Results = h2hData.secondPlayerResults || [];
-      const p1Form = calcFormScore(p1Results, match.first_player_key);
-      const p2Form = calcFormScore(p2Results, match.second_player_key);
-
-      const formDiff = p1Form - p2Form;
-      const formFactor = 50 + (formDiff * 5);
-
-      factors.form = {
-        label: 'Forma',
-        p1: `${p1Form.toFixed(0)}%`,
-        p2: `${p2Form.toFixed(0)}%`,
-        score: clamp(formFactor, 0, 100),
-        impact: formFactor > 50 ? 'P1' : 'P2',
-      };
-      totalScore += (clamp(formFactor, 0, 100) - 50) * 0.25;
-      dataPoints++;
-    } else {
-      factors.form = { label: 'Forma', p1: 'N/D', p2: 'N/D', score: 50, impact: '-' };
-    }
-
-    // --- Factor 3: H2H Record ---
-    if (h2hData && h2hData.H2H && h2hData.H2H.length > 0) {
-      let p1Wins = 0, p2Wins = 0;
-      h2hData.H2H.forEach(m => {
-        if (m.event_winner === 'First Player' && m.first_player_key == match.first_player_key) p1Wins++;
-        else if (m.event_winner === 'Second Player' && m.second_player_key == match.second_player_key) p1Wins++;
-        else if (m.event_winner === 'First Player' && m.first_player_key == match.second_player_key) p2Wins++;
-        else if (m.event_winner === 'Second Player' && m.second_player_key == match.first_player_key) p2Wins++;
-        else if (m.event_winner) p2Wins++;
-      });
-
-      const total = p1Wins + p2Wins;
-      const h2hFactor = total > 0 ? (p1Wins / total) * 100 : 50;
-
-      factors.h2h = {
-        label: 'H2H',
-        p1: `${p1Wins}W`,
-        p2: `${p2Wins}W`,
-        score: h2hFactor,
-        impact: h2hFactor > 50 ? 'P1' : 'P2',
-      };
-      totalScore += (h2hFactor - 50) * 0.20;
-      dataPoints++;
-    } else {
-      factors.h2h = { label: 'H2H', p1: 'N/D', p2: 'N/D', score: 50, impact: '-' };
-    }
-
-    // --- Factor 4: Surface Affinity ---
-    const surface = detectSurface(match.tournament_name || '');
-    factors.surface = {
-      label: 'Superficie',
-      value: surface || 'Sconosciuta',
-      score: 50,
-      impact: '-',
-    };
-    // Surface scoring would require player stats per surface — placeholder for enrichment
-    totalScore += 0; // neutral until we have surface data
-    if (surface) dataPoints++;
-
-    // --- Factor 5: Odds Value ---
-    if (odds) {
-      const impliedP1 = odds.p1Odds ? (1 / odds.p1Odds) : null;
-      const impliedP2 = odds.p2Odds ? (1 / odds.p2Odds) : null;
-      const ourProb = totalScore / 100;
-
-      if (impliedP1 && impliedP2) {
-        const margin = impliedP1 + impliedP2 - 1;
-        const fairP1 = impliedP1 / (1 + margin);
-        const edge = ourProb - fairP1;
-
-        factors.odds = {
-          label: 'Quote',
-          p1: odds.p1Odds.toFixed(2),
-          p2: odds.p2Odds.toFixed(2),
-          score: 50 + (edge * 100),
-          impact: edge > 0.03 ? 'VALUE P1' : edge < -0.03 ? 'VALUE P2' : 'Fair',
-          edge: (edge * 100).toFixed(1),
-        };
-        totalScore += edge * 15;
-        dataPoints++;
-      }
-    } else {
-      factors.odds = { label: 'Quote', p1: 'N/D', p2: 'N/D', score: 50, impact: '-' };
-    }
-
-    // --- Final Score ---
-    const finalScore = clamp(totalScore, 0, 100);
-    const confidence = Math.abs(finalScore - 50) * 2; // 0-100 confidence
-    const tier = calcTier(confidence, dataPoints);
-    const favored = finalScore >= 50 ? 'P1' : 'P2';
-
-    return {
-      finalScore: finalScore.toFixed(1),
-      confidence: confidence.toFixed(0),
-      tier,
-      favored,
-      favoredName: favored === 'P1' ? match.event_first_player : match.event_second_player,
-      probability: favored === 'P1' ? finalScore.toFixed(0) : (100 - finalScore).toFixed(0),
-      factors,
-      dataPoints,
-      valueBet: factors.odds?.impact?.startsWith('VALUE') || false,
-    };
-  }
-
-  function calcFormScore(results, playerKey) {
-    const last5 = results.slice(0, 5);
-    if (last5.length === 0) return 50;
-
-    let wins = 0;
-    last5.forEach(m => {
-      const isFirst = m.first_player_key == playerKey;
-      if ((isFirst && m.event_winner === 'First Player') ||
-          (!isFirst && m.event_winner === 'Second Player')) {
-        wins++;
-      }
-    });
-
-    return (wins / last5.length) * 100;
-  }
-
-  function calcTier(confidence, dataPoints) {
-    if (dataPoints < 2) return 'skip';
-    if (confidence >= 65) return 'gold';
-    if (confidence >= 45) return 'silver';
-    if (confidence >= 25) return 'bronze';
-    return 'skip';
-  }
-
-  function detectSurface(tournamentName) {
-    const name = tournamentName.toLowerCase();
-    // Known clay tournaments
-    if (/roland\s*garros|rome|madrid|monte\s*carlo|barcelona|rio|buenos\s*aires|lyon|hamburg|kitzbuhel|bastad|gstaad|umag|bucharest/i.test(name)) return 'clay';
-    // Known grass
-    if (/wimbledon|queen|halle|eastbourne|s-hertogenbosch|mallorca|stuttgart|nottingham/i.test(name)) return 'grass';
-    // Known indoor
-    if (/paris\s*masters|vienna|basel|stockholm|st\.\s*petersburg|moscow|sofia|metz|astana/i.test(name)) return 'indoor';
-    // Default hard
-    return 'hard';
-  }
-
-  function extractRank(match, player) {
-    // API doesn't directly provide ranking in fixtures — would need standings data
-    // For now we use a placeholder; real implementation fetches from standings cache
+  async function getH2H(p1, p2) {
+    const k = `${p1}_${p2}`;
+    if (S.h2hCache[k]) return S.h2hCache[k];
+    const d = await api('h2h', { p1, p2 });
+    if (d.success === 1 && d.result) { S.h2hCache[k] = d.result; return d.result; }
     return null;
   }
 
-  function sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
-  function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
-
-  // ════════════════════════════════════════════
-  //  LOAD & RENDER: MATCHES
-  // ════════════════════════════════════════════
-
-  async function loadMatches() {
-    const container = document.getElementById('matchesContainer');
-    container.innerHTML = `<div class="loading-state"><div class="loading-spinner"></div><p>Caricamento partite...</p></div>`;
-
-    const date = getDateString(state.selectedDate);
-    const data = await apiCall('get_fixtures', {
-      date_start: date,
-      date_stop: date,
-    });
-
-    if (data.success === 1 && data.result && data.result.length > 0) {
-      state.allMatches = data.result;
-      renderMatches();
-    } else {
-      container.innerHTML = `
-        <div class="empty-state">
-          <div class="empty-icon">🎾</div>
-          <div class="empty-title">Nessuna partita trovata</div>
-          <p class="empty-text">Non ci sono partite programmate per ${date}. Prova un'altra data.</p>
-        </div>`;
-    }
+  async function getOdds(ek) {
+    if (S.oddsCache[ek]) return S.oddsCache[ek];
+    const d = await api('odds', { mk: ek });
+    if (d.success === 1 && d.result) { S.oddsCache[ek] = d.result; return d.result; }
+    return null;
   }
 
-  function renderMatches() {
-    const container = document.getElementById('matchesContainer');
-    let matches = [...state.allMatches];
+  // ════════════════════════════════════════════════════════════
+  //  🧠 ENGINE v3.0 — 8 MODELS + CONSENSUS + TRAP + KELLY
+  // ════════════════════════════════════════════════════════════
 
-    // Category filter
-    if (state.matchFilter !== 'all') {
-      matches = matches.filter(m => {
-        const type = (m.event_type_type || '').toLowerCase();
-        if (state.matchFilter === 'atp') return type.includes('atp');
-        if (state.matchFilter === 'wta') return type.includes('wta');
-        if (state.matchFilter === 'challenger') return type.includes('challenger');
-        return true;
-      });
-    }
+  function runEngine(match, h2h, odds) {
+    const surf = detectSurf(match.tournament_name || '');
+    const bo5 = isSlam(match.tournament_name || '');
+    const M = {};
 
-    // Sort: upcoming first, then by time
-    matches.sort((a, b) => {
-      const aFinished = a.event_status === 'Finished' ? 1 : 0;
-      const bFinished = b.event_status === 'Finished' ? 1 : 0;
-      if (aFinished !== bFinished) return aFinished - bFinished;
-      return (a.event_time || '').localeCompare(b.event_time || '');
+    M.elo = mElo(h2h, match);
+    M.surface = mSurface(h2h, match, surf);
+    M.form = mForm(h2h, match);
+    M.h2h = mH2H(h2h, match);
+    M.dominance = mDominance(h2h, match);
+    M.serve = mServe(h2h, match);
+    M.fatigue = mFatigue(h2h, match);
+    M.odds = mOdds(odds);
+
+    const consensus = calcConsensus(M);
+    const regression = calcRegression(M, consensus);
+    const trap = detectTrap(M, consensus);
+    const markets = calcMarkets(consensus, match, h2h, surf, bo5, M.odds);
+
+    return { M, consensus, regression, trap, markets, surf, bo5, dq: dataQuality(M) };
+  }
+
+  // ── 1. Elo ──
+  function mElo(h2h, match) {
+    const r = { name: 'Elo Rating', icon: '📐', p1: 50, conf: 0, det: '' };
+    if (!h2h) return r;
+    const p1R = h2h.firstPlayerResults || [], p2R = h2h.secondPlayerResults || [];
+    if (p1R.length < 2 && p2R.length < 2) { r.det = 'Dati insufficienti'; return r; }
+
+    let e1 = 1500, e2 = 1500;
+    const K = 32;
+    p1R.slice(0, 12).reverse().forEach(m => {
+      const won = isWin(m, match.first_player_key);
+      e1 += K * ((won ? 1 : 0) - 1 / (1 + Math.pow(10, (1500 - e1) / 400)));
+    });
+    p2R.slice(0, 12).reverse().forEach(m => {
+      const won = isWin(m, match.second_player_key);
+      e2 += K * ((won ? 1 : 0) - 1 / (1 + Math.pow(10, (1500 - e2) / 400)));
     });
 
-    // Generate predictions (basic — without H2H for speed)
-    const cardsHtml = matches.map(match => {
-      const prediction = predictMatch(match);
+    const d = e1 - e2;
+    r.p1 = clamp(1 / (1 + Math.pow(10, -d / 400)) * 100, 5, 95);
+    r.conf = Math.min(Math.abs(d) / 2.5, 100);
+    r.det = `${e1.toFixed(0)} vs ${e2.toFixed(0)} (Δ${d > 0 ? '+' : ''}${d.toFixed(0)})`;
+    return r;
+  }
 
-      // Tier filter
-      if (state.tierFilter !== 'all') {
-        const tierOrder = { gold: 1, silver: 2, bronze: 3, skip: 4 };
-        const filterLevel = tierOrder[state.tierFilter] || 4;
-        const matchLevel = tierOrder[prediction.tier] || 4;
-        if (matchLevel > filterLevel) return '';
+  // ── 2. Surface ──
+  function mSurface(h2h, match, surf) {
+    const r = { name: `Superficie (${cap(surf)})`, icon: '🏟️', p1: 50, conf: 0, det: '' };
+    if (!h2h || surf === 'unknown') return r;
+    const s1 = surfWins(h2h.firstPlayerResults || [], match.first_player_key, surf);
+    const s2 = surfWins(h2h.secondPlayerResults || [], match.second_player_key, surf);
+    const r1 = s1.w / Math.max(s1.t, 1), r2 = s2.w / Math.max(s2.t, 1);
+    r.p1 = clamp(50 + (r1 - r2) * 55, 8, 92);
+    r.conf = Math.min((s1.t + s2.t) * 7, 100);
+    r.det = `P1: ${(r1 * 100).toFixed(0)}% (${s1.w}/${s1.t}) | P2: ${(r2 * 100).toFixed(0)}% (${s2.w}/${s2.t})`;
+    return r;
+  }
+
+  function surfWins(res, pk, surf) {
+    let w = 0, t = 0;
+    res.slice(0, 15).forEach(m => { if (detectSurf(m.tournament_name || '') === surf) { t++; if (isWin(m, pk)) w++; } });
+    return { w, t };
+  }
+
+  // ── 3. Form Momentum ──
+  function mForm(h2h, match) {
+    const r = { name: 'Forma Recente', icon: '🔥', p1: 50, conf: 0, det: '', s1: '', s2: '' };
+    if (!h2h) return r;
+    const f1 = wForm(h2h.firstPlayerResults || [], match.first_player_key);
+    const f2 = wForm(h2h.secondPlayerResults || [], match.second_player_key);
+    r.p1 = clamp(50 + (f1.sc - f2.sc) * 28, 6, 94);
+    r.conf = Math.min((f1.n + f2.n) * 9, 100);
+    r.det = `P1: ${(f1.sc * 100).toFixed(0)}% ${f1.str} | P2: ${(f2.sc * 100).toFixed(0)}% ${f2.str}`;
+    r.s1 = f1.str; r.s2 = f2.str;
+    return r;
+  }
+
+  function wForm(res, pk) {
+    const l = res.slice(0, 8);
+    if (!l.length) return { sc: 0.5, str: '-', n: 0 };
+    let ws = 0, wt = 0, sk = 0, st = null;
+    l.forEach((m, i) => {
+      const w = 1 - i * 0.1, won = isWin(m, pk);
+      ws += won ? w : 0; wt += w;
+      if (i === 0) { st = won; sk = 1; } else if (won === st) sk++;
+    });
+    return { sc: wt > 0 ? ws / wt : 0.5, str: st ? `${sk}W🟢` : `${sk}L🔴`, n: l.length };
+  }
+
+  // ── 4. H2H ──
+  function mH2H(h2h, match) {
+    const r = { name: 'Head-to-Head', icon: '⚔️', p1: 50, conf: 0, det: '', w1: 0, w2: 0 };
+    if (!h2h || !h2h.H2H || !h2h.H2H.length) { r.det = 'Nessun precedente'; return r; }
+    let w1 = 0, w2 = 0, rw1 = 0, rw2 = 0;
+    h2h.H2H.forEach((m, i) => {
+      const p1w = isWin(m, match.first_player_key);
+      if (p1w) w1++; else w2++;
+      if (i < 3) { if (p1w) rw1++; else rw2++; }
+    });
+    const tot = w1 + w2, base = (w1 / tot) * 100;
+    const rec = (rw1 + rw2) > 0 ? (rw1 / (rw1 + rw2)) * 100 : base;
+    r.p1 = clamp(base * 0.55 + rec * 0.45, 8, 92);
+    r.conf = Math.min(tot * 18, 100);
+    r.det = `${w1}-${w2} (ultimi 3: ${rw1}-${rw2})`;
+    r.w1 = w1; r.w2 = w2;
+    return r;
+  }
+
+  // ── 5. Dominance Index (NEW) ──
+  function mDominance(h2h, match) {
+    const r = { name: 'Indice Dominio', icon: '💪', p1: 50, conf: 0, det: '' };
+    if (!h2h) return r;
+    const d1 = calcDominance(h2h.firstPlayerResults || [], match.first_player_key);
+    const d2 = calcDominance(h2h.secondPlayerResults || [], match.second_player_key);
+    if (d1.n === 0 && d2.n === 0) return r;
+    r.p1 = clamp(50 + (d1.idx - d2.idx) * 20, 10, 90);
+    r.conf = Math.min((d1.n + d2.n) * 8, 100);
+    r.det = `P1: ${d1.idx.toFixed(2)} (${d1.straight}/${d1.n} in 2) | P2: ${d2.idx.toFixed(2)} (${d2.straight}/${d2.n} in 2)`;
+    return r;
+  }
+
+  function calcDominance(res, pk) {
+    let totalMargin = 0, straight = 0, n = 0;
+    res.slice(0, 8).forEach(m => {
+      if (!m.scores || !m.scores.length || m.event_winner === null) return;
+      const won = isWin(m, pk);
+      if (!won) return;
+      n++;
+      // Calculate game margin
+      let gamesWon = 0, gamesLost = 0;
+      const isFirst = String(m.first_player_key) === String(pk);
+      m.scores.forEach(s => {
+        gamesWon += parseInt(isFirst ? s.score_first : s.score_second) || 0;
+        gamesLost += parseInt(isFirst ? s.score_second : s.score_first) || 0;
+      });
+      totalMargin += (gamesWon - gamesLost);
+      // Straight sets = won in minimum sets
+      const setsWon = m.scores.filter(s => {
+        const a = parseInt(isFirst ? s.score_first : s.score_second) || 0;
+        const b = parseInt(isFirst ? s.score_second : s.score_first) || 0;
+        return a > b;
+      }).length;
+      if (setsWon === m.scores.length) straight++;
+    });
+    const idx = n > 0 ? totalMargin / n / 5 : 0; // normalized dominance
+    return { idx: clamp(idx, -1, 1), straight, n };
+  }
+
+  // ── 6. Serve Efficiency (NEW) ──
+  function mServe(h2h, match) {
+    const r = { name: 'Efficienza Servizio', icon: '🎯', p1: 50, conf: 0, det: '' };
+    if (!h2h) return r;
+    const s1 = calcServeEff(h2h.firstPlayerResults || [], match.first_player_key);
+    const s2 = calcServeEff(h2h.secondPlayerResults || [], match.second_player_key);
+    if (s1.n === 0 && s2.n === 0) return r;
+    r.p1 = clamp(50 + (s1.eff - s2.eff) * 35, 10, 90);
+    r.conf = Math.min((s1.n + s2.n) * 7, 100);
+    r.det = `P1: ${(s1.eff * 100).toFixed(0)}% hold | P2: ${(s2.eff * 100).toFixed(0)}% hold`;
+    return r;
+  }
+
+  function calcServeEff(res, pk) {
+    // Estimate serve hold % from set scores
+    // In a set, if player won 6 games, roughly half on serve. 6-4 means ~3 holds + 1 break
+    let totalSets = 0, holdRate = 0;
+    res.slice(0, 8).forEach(m => {
+      if (!m.scores || !m.scores.length) return;
+      const isFirst = String(m.first_player_key) === String(pk);
+      m.scores.forEach(s => {
+        const won = parseInt(isFirst ? s.score_first : s.score_second) || 0;
+        const lost = parseInt(isFirst ? s.score_second : s.score_first) || 0;
+        const totalGames = won + lost;
+        if (totalGames < 6) return;
+        // Estimate: in a set, each player serves ~half the games
+        // Games won on serve ≈ won - breaks made. Breaks made ≈ (lost_serve_games)
+        // Simplified: hold% ≈ games_won / (total_games / 2)
+        const serveGames = Math.ceil(totalGames / 2);
+        holdRate += Math.min(won / serveGames, 1);
+        totalSets++;
+      });
+    });
+    return { eff: totalSets > 0 ? holdRate / totalSets : 0.5, n: totalSets };
+  }
+
+  // ── 7. Fatigue Factor (NEW) ──
+  function mFatigue(h2h, match) {
+    const r = { name: 'Fattore Fatica', icon: '🔋', p1: 50, conf: 0, det: '' };
+    if (!h2h) return r;
+    const f1 = calcFatigue(h2h.firstPlayerResults || [], match.event_date);
+    const f2 = calcFatigue(h2h.secondPlayerResults || [], match.event_date);
+
+    // Lower fatigue = better. If f1 < f2, P1 is more rested
+    const diff = f2.score - f1.score; // positive = P1 advantage
+    r.p1 = clamp(50 + diff * 8, 20, 80);
+    r.conf = Math.min((f1.matches + f2.matches) * 10, 70);
+    r.det = `P1: ${f1.label} (${f1.matches} in 7gg) | P2: ${f2.label} (${f2.matches} in 7gg)`;
+    return r;
+  }
+
+  function calcFatigue(res, matchDate) {
+    const today = new Date(matchDate || new Date());
+    let matchesIn7d = 0, matchesIn3d = 0, lastMatchDaysAgo = 999;
+
+    res.slice(0, 10).forEach(m => {
+      if (!m.event_date) return;
+      const mDate = new Date(m.event_date);
+      const daysAgo = Math.floor((today - mDate) / 86400000);
+      if (daysAgo >= 0 && daysAgo <= 7) matchesIn7d++;
+      if (daysAgo >= 0 && daysAgo <= 3) matchesIn3d++;
+      if (daysAgo >= 0 && daysAgo < lastMatchDaysAgo) lastMatchDaysAgo = daysAgo;
+    });
+
+    // Fatigue score: higher = more tired
+    const score = matchesIn3d * 2 + matchesIn7d * 0.5 + (lastMatchDaysAgo <= 1 ? 2 : 0);
+    let label = '🟢 Fresco';
+    if (score >= 5) label = '🔴 Stanco';
+    else if (score >= 3) label = '🟡 Normale';
+
+    return { score, matches: matchesIn7d, label, lastDaysAgo: lastMatchDaysAgo };
+  }
+
+  // ── 8. Odds Intelligence ──
+  function mOdds(oddsData) {
+    const r = { name: 'Intelligence Quote', icon: '💰', p1: 50, conf: 0, det: '', p1O: null, p2O: null };
+    if (!oddsData) { r.det = 'Quote N/D'; return r; }
+    const o = parseOdds(oddsData);
+    if (!o) { r.det = 'Quote non trovate'; return r; }
+    r.p1O = o.p1; r.p2O = o.p2;
+    const i1 = 1 / o.p1, i2 = 1 / o.p2, mg = i1 + i2 - 1;
+    const fair1 = (i1 / (i1 + i2)) * 100;
+    r.p1 = fair1;
+    r.conf = clamp(mg * 200 + 40, 20, 92);
+    r.det = `P1: ${o.p1.toFixed(2)} (${fair1.toFixed(0)}%) | P2: ${o.p2.toFixed(2)} (${(100 - fair1).toFixed(0)}%) | Mg: ${(mg * 100).toFixed(1)}%`;
+    return r;
+  }
+
+  function parseOdds(data) {
+    try {
+      const arr = Array.isArray(data) ? data : [data];
+      for (const e of arr) {
+        if (!e) continue;
+        if (e.odd_1 && e.odd_2) return { p1: +e.odd_1, p2: +e.odd_2 };
+        for (const bk of (e.bookmakers || [])) {
+          for (const mk of (Array.isArray(bk.odds || bk.markets) ? (bk.odds || bk.markets) : [])) {
+            if (mk.odd_1 && mk.odd_2) return { p1: +mk.odd_1, p2: +mk.odd_2 };
+          }
+        }
       }
-
-      return renderMatchCard(match, prediction);
-    }).join('');
-
-    container.innerHTML = cardsHtml || `
-      <div class="empty-state">
-        <div class="empty-icon">🔍</div>
-        <div class="empty-title">Nessun match con questi filtri</div>
-        <p class="empty-text">Prova a cambiare i filtri per vedere più partite.</p>
-      </div>`;
+    } catch (e) {}
+    return null;
   }
 
-  function renderMatchCard(match, prediction) {
-    const isFinished = match.event_status === 'Finished';
-    const isLive = match.event_live === '1';
-    const surface = detectSurface(match.tournament_name || '');
+  // ═══════ CONSENSUS ENGINE ═══════
+  function calcConsensus(M) {
+    let ws = 0, wt = 0, active = 0;
+    const bd = [];
+    Object.entries(CFG.WEIGHTS).forEach(([k, w]) => {
+      const m = M[k];
+      if (!m || m.conf === 0) { bd.push({ k, name: m?.name || k, p1: 50, w: 0, active: false }); return; }
+      const ew = w * (m.conf / 100);
+      ws += m.p1 * ew; wt += ew; active++;
+      bd.push({ k, name: m.name, icon: m.icon, p1: m.p1, w: ew, conf: m.conf, active: true });
+    });
+    const cp = wt > 0 ? ws / wt : 50;
+    return { p1: clamp(cp, 2, 98), p2: clamp(100 - cp, 2, 98), conf: (Math.abs(cp - 50) * 2).toFixed(0), fav: cp >= 50 ? 'P1' : 'P2', active, total: 8, bd };
+  }
 
-    // Score display
-    let scoreHtml = '';
-    if (match.scores && match.scores.length > 0) {
-      scoreHtml = `<div class="match-score">
-        ${match.scores.map(s => {
-          const p1Won = parseInt(s.score_first) > parseInt(s.score_second);
-          return `<div class="set-score ${p1Won ? 'won' : ''}">${s.score_first}-${s.score_second}</div>`;
-        }).join('')}
-      </div>`;
+  // ═══════ REGRESSION SCORE ═══════
+  function calcRegression(M, C) {
+    const agree = modelAgree(M);
+    const avgC = C.bd.filter(b => b.active).reduce((s, b) => s + (b.conf || 0), 0) / Math.max(C.active, 1);
+    const sc = +C.conf * 0.35 + agree * 0.35 + avgC * 0.30;
+    const tier = sc >= 72 ? 'gold' : sc >= 52 ? 'silver' : sc >= 32 ? 'bronze' : 'skip';
+    const stars = sc >= 82 ? 5 : sc >= 67 ? 4 : sc >= 52 ? 3 : sc >= 37 ? 2 : 1;
+    return { sc: sc.toFixed(1), tier, stars, agree: agree.toFixed(0), avgC: avgC.toFixed(0) };
+  }
+
+  function modelAgree(M) {
+    const p = Object.values(M).filter(m => m && m.conf > 0).map(m => m.p1 >= 50 ? 'P1' : 'P2');
+    if (!p.length) return 0;
+    return (Math.max(p.filter(x => x === 'P1').length, p.filter(x => x === 'P2').length) / p.length) * 100;
+  }
+
+  // ═══════ 🕵️ TRAP DETECTOR ═══════
+  function detectTrap(M, C) {
+    const flags = [];
+    // Trap 1: Odds disagree strongly with consensus
+    if (M.odds.conf > 0 && Math.abs(M.odds.p1 - C.p1) > 18) {
+      flags.push('⚠️ Quote in forte disaccordo con il consensus');
+    }
+    // Trap 2: Good form but bad H2H
+    if (M.form.conf > 0 && M.h2h.conf > 0) {
+      const formFav = M.form.p1 >= 50 ? 'P1' : 'P2';
+      const h2hFav = M.h2h.p1 >= 50 ? 'P1' : 'P2';
+      if (formFav !== h2hFav && Math.abs(M.form.p1 - 50) > 12 && Math.abs(M.h2h.p1 - 50) > 12) {
+        flags.push('⚠️ Forma e H2H indicano giocatori diversi');
+      }
+    }
+    // Trap 3: Fatigue imbalance
+    if (M.fatigue.conf > 0 && Math.abs(M.fatigue.p1 - 50) > 15) {
+      const tired = M.fatigue.p1 > 50 ? 'P2' : 'P1';
+      if (tired === C.fav) flags.push('⚠️ Il favorito potrebbe essere stanco');
+    }
+    // Trap 4: Low model agreement with high confidence
+    const agree = modelAgree(M);
+    if (agree < 65 && +C.conf > 40) {
+      flags.push('⚠️ Modelli divisi — alto rischio');
+    }
+    // Trap 5: Surface specialist underdog
+    if (M.surface.conf > 30 && M.surface.p1 < 40 && C.fav === 'P1') {
+      flags.push('⚠️ Sfavorito è uno specialista di questa superficie');
+    }
+    if (M.surface.conf > 30 && M.surface.p1 > 60 && C.fav === 'P2') {
+      flags.push('⚠️ Sfavorito è uno specialista di questa superficie');
     }
 
-    // Result badge for finished
-    let resultBadge = '';
-    if (isFinished && match.event_winner) {
-      const winner = match.event_winner === 'First Player' ? match.event_first_player : match.event_second_player;
-      resultBadge = `<span class="status-badge finished">✓ ${winner}</span>`;
-    } else if (isLive) {
-      resultBadge = `<span class="status-badge live">● LIVE</span>`;
-    } else {
-      resultBadge = `<span class="status-badge upcoming">${match.event_time || 'TBD'}</span>`;
+    return { isTrap: flags.length >= 2, flags };
+  }
+
+  // ═══════ MARKETS + KELLY ═══════
+  function calcMarkets(C, match, h2h, surf, bo5, oddsM) {
+    const mk = {};
+    const fName = C.fav === 'P1' ? match.event_first_player : match.event_second_player;
+    const oName = C.fav === 'P1' ? match.event_second_player : match.event_first_player;
+    const prob = C.fav === 'P1' ? C.p1 : C.p2;
+
+    // Kelly Criterion
+    let kelly = null;
+    const favOdds = C.fav === 'P1' ? oddsM.p1O : oddsM.p2O;
+    if (favOdds && favOdds > 1) {
+      const p = prob / 100, b = favOdds - 1;
+      const kf = (b * p - (1 - p)) / b;
+      kelly = kf > 0 ? { fraction: (kf * 100).toFixed(1), quarter: (kf * 25).toFixed(1), odds: favOdds.toFixed(2) } : null;
     }
 
-    // Surface badge
-    const surfaceHtml = surface ? `<span class="surface-badge ${surface}">${surface.toUpperCase()}</span>` : '';
+    mk.winner = { name: 'Vincente Match', icon: '🏆', pick: fName, prob: prob.toFixed(1), vs: oName, kelly };
 
-    // Prediction bar (only for upcoming matches)
-    let predictionHtml = '';
-    if (!isFinished) {
-      predictionHtml = `
-        <div class="prediction-bar">
-          <span class="tier-badge ${prediction.tier}">${prediction.tier.toUpperCase()}</span>
-          <span class="prediction-text">
-            ${prediction.tier !== 'skip' ? `→ <strong>${prediction.favoredName}</strong>` : 'Dati insufficienti'}
-          </span>
-          ${prediction.tier !== 'skip' ? `
-            <div class="prediction-prob">
-              <div class="prob-bar">
-                <div class="prob-fill" style="width:${prediction.probability}%"></div>
-              </div>
-              <span class="prob-label">${prediction.probability}%</span>
-            </div>
-          ` : ''}
-          ${prediction.valueBet ? '<span class="value-bet">💰 VALUE</span>' : ''}
-        </div>`;
+    // Over/Under
+    const sets = bo5 ? 3.2 : 2.3;
+    const avg = CFG.GAMES_PER_SET[surf] || 9.9;
+    const close = 1 - Math.abs(C.p1 - 50) / 50;
+    let tg = sets * avg + close * 3.5;
+    let h2hAvg = null;
+    if (h2h && h2h.H2H) {
+      const gc = h2h.H2H.slice(0, 5).map(m => m.scores ? m.scores.reduce((s, sc) => s + (+sc.score_first || 0) + (+sc.score_second || 0), 0) : null).filter(Boolean);
+      if (gc.length) h2hAvg = gc.reduce((a, b) => a + b) / gc.length;
     }
+    const adj = h2hAvg ? tg * 0.55 + h2hAvg * 0.45 : tg;
+    const line = bo5 ? 38.5 : Math.round(adj) + 0.5;
+    const oP = clamp(50 + (adj - line) * 9, 12, 88);
+    mk.ou = { name: 'Over/Under Game', icon: '📊', line, pred: adj.toFixed(1), pick: oP >= 53 ? `Over ${line}` : oP <= 47 ? `Under ${line}` : 'Neutro', oP: oP.toFixed(0), uP: (100 - oP).toFixed(0), h2hAvg: h2hAvg ? h2hAvg.toFixed(1) : null };
 
-    // Expandable factors
-    let factorsHtml = '';
-    if (!isFinished && prediction.tier !== 'skip') {
-      factorsHtml = `
-        <div class="match-details">
-          <div class="factors-grid">
-            ${Object.values(prediction.factors).map(f => `
-              <div class="factor-item">
-                <span class="factor-label">${f.label}</span>
-                <span class="factor-value ${f.score > 55 ? 'positive' : f.score < 45 ? 'negative' : 'neutral'}">
-                  ${f.p1 || f.value || '-'} ${f.p2 ? `vs ${f.p2}` : ''}
-                </span>
-              </div>
-            `).join('')}
-          </div>
-        </div>
-        <button class="expand-toggle" onclick="TennisPro.toggleExpand(this)">
-          ▾ Dettagli fattori
-        </button>`;
-    }
+    // Set Score
+    const pw = C.p1 / 100;
+    mk.sets = { name: 'Risultato Set', icon: '🎯', bo: bo5 ? 5 : 3, preds: bo5 ? bo5Scores(pw) : bo3Scores(pw) };
 
-    // H2H button
-    const h2hButton = !isFinished ? `
-      <button class="filter-btn" style="font-size:0.7rem; padding:4px 10px;"
-        onclick="TennisPro.quickH2H('${match.first_player_key}','${match.second_player_key}','${escapeHtml(match.event_first_player)}','${escapeHtml(match.event_second_player)}')">
-        🔄 H2H
-      </button>` : '';
+    return mk;
+  }
+
+  function bo3Scores(p) {
+    const s = Math.pow(p, 0.82), q = 1 - s;
+    const sc = [
+      { s: '2-0', p: s * s, f: 'P1' }, { s: '2-1', p: 2 * s * q * s, f: 'P1' },
+      { s: '0-2', p: q * q, f: 'P2' }, { s: '1-2', p: 2 * s * q * q, f: 'P2' },
+    ];
+    const t = sc.reduce((a, b) => a + b.p, 0);
+    return sc.map(x => ({ ...x, p: ((x.p / t) * 100).toFixed(1) })).sort((a, b) => b.p - a.p);
+  }
+
+  function bo5Scores(p) {
+    const s = Math.pow(p, 0.82), q = 1 - s;
+    const sc = [
+      { s: '3-0', p: s ** 3, f: 'P1' }, { s: '3-1', p: 3 * s ** 3 * q, f: 'P1' }, { s: '3-2', p: 6 * s ** 3 * q ** 2, f: 'P1' },
+      { s: '0-3', p: q ** 3, f: 'P2' }, { s: '1-3', p: 3 * q ** 3 * s, f: 'P2' }, { s: '2-3', p: 6 * q ** 3 * s ** 2, f: 'P2' },
+    ];
+    const t = sc.reduce((a, b) => a + b.p, 0);
+    return sc.map(x => ({ ...x, p: ((x.p / t) * 100).toFixed(1) })).sort((a, b) => b.p - a.p);
+  }
+
+  function dataQuality(M) {
+    const a = Object.values(M).filter(m => m && m.conf > 0).length;
+    if (a >= 6) return { l: 'HD', d: 'Alta Definizione', c: 'var(--accent)' };
+    if (a >= 4) return { l: 'MD', d: 'Media Definizione', c: 'var(--gold)' };
+    return { l: 'LD', d: 'Bassa Definizione', c: 'var(--lose)' };
+  }
+
+  // ═══════ UTILS ═══════
+  function isWin(m, pk) {
+    const isF = String(m.first_player_key) === String(pk);
+    return (isF && m.event_winner === 'First Player') || (!isF && m.event_winner === 'Second Player');
+  }
+
+  function detectSurf(n) {
+    n = n.toLowerCase();
+    if (/roland.garros|french.open|rome|roma|madrid|monte.carlo|barcelona|rio|buenos.aires|lyon|hamburg|kitzbuhel|bastad|gstaad|umag|bucharest|marrakech|cordoba|estoril|geneva|parma|sardegna|cagliari|bois.le.duc/i.test(n)) return 'clay';
+    if (/wimbledon|queen|halle|eastbourne|hertogenbosch|mallorca|stuttgart|nottingham|newport/i.test(n)) return 'grass';
+    if (/paris.masters|paris.indoor|vienna|basel|stockholm|petersburg|moscow|sofia|metz|astana|marseille|dallas|montpellier/i.test(n)) return 'indoor';
+    return 'hard';
+  }
+
+  function isSlam(n) { return /roland.garros|french.open|wimbledon|us.open|australian.open/i.test(n); }
+  function clamp(v, mn, mx) { return Math.max(mn, Math.min(mx, v)); }
+  function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+
+  // ════════════════════════════════════════════════════════════
+  //  RENDER: ANALYSIS MODAL
+  // ════════════════════════════════════════════════════════════
+
+  function renderAnalysis(match, A, h2h) {
+    const { M, consensus: C, regression: R, trap: T, markets: MK, surf, bo5, dq } = A;
+    const p1 = match.event_first_player, p2 = match.event_second_player;
+    const fav = C.fav === 'P1' ? p1 : p2;
 
     return `
-      <div class="match-card tier-${prediction.tier} ${isLive ? 'live' : ''}" data-match="${match.event_key}">
-        <div class="match-card-header">
-          <span class="match-tournament">
-            ${surfaceHtml}
-            ${match.tournament_name || 'Torneo'}
-            <span class="match-round">${match.tournament_round || match.event_type_type || ''}</span>
-          </span>
-          <div style="display:flex; gap:8px; align-items:center;">
-            ${h2hButton}
-            ${resultBadge}
-          </div>
+      <div class="analysis-header">
+        <div class="analysis-tournament"><span class="surface-badge ${surf}">${surf.toUpperCase()}</span> ${match.tournament_name || ''} <span class="match-round">${match.tournament_round || match.event_type_type || ''}</span>${bo5 ? ' <span class="match-round" style="color:var(--gold)">Grand Slam Bo5</span>' : ''}</div>
+        <div class="analysis-time">${match.event_time || 'TBD'}</div>
+      </div>
+
+      <div class="analysis-matchup">
+        <div class="analysis-player ${C.fav === 'P1' ? 'favored' : ''}">
+          <div class="analysis-player-name">${p1}</div>
+          <div class="analysis-player-prob">${C.p1.toFixed(1)}%</div>
+          ${M.form.s1 ? `<div class="analysis-player-streak">${M.form.s1}</div>` : ''}
         </div>
-
-        <div class="match-players">
-          <div class="player">
-            <span class="player-name ${match.event_winner === 'First Player' ? 'winner' : ''}">${match.event_first_player}</span>
-          </div>
-          <div style="text-align:center">
-            <div class="match-vs">VS</div>
-            ${scoreHtml}
-          </div>
-          <div class="player right">
-            <span class="player-name ${match.event_winner === 'Second Player' ? 'winner' : ''}">${match.event_second_player}</span>
-          </div>
-        </div>
-
-        ${predictionHtml}
-        ${factorsHtml}
-      </div>`;
-  }
-
-  // ════════════════════════════════════════════
-  //  LOAD & RENDER: LIVE SCORE
-  // ════════════════════════════════════════════
-
-  async function loadLive() {
-    const container = document.getElementById('liveContainer');
-    const data = await apiCall('get_livescore');
-
-    if (data.success === 1 && data.result && data.result.length > 0) {
-      state.liveMatches = data.result;
-
-      // Update live count badge
-      const badge = document.getElementById('liveCount');
-      badge.textContent = data.result.length;
-      badge.style.display = 'inline';
-
-      renderLive();
-    } else {
-      state.liveMatches = [];
-      document.getElementById('liveCount').style.display = 'none';
-
-      container.innerHTML = `
-        <div class="empty-state">
-          <div class="empty-icon">😴</div>
-          <div class="empty-title">Nessun match live</div>
-          <p class="empty-text">Non ci sono partite in corso al momento. Controlla più tardi!</p>
-        </div>`;
-    }
-  }
-
-  function renderLive() {
-    const container = document.getElementById('liveContainer');
-    let matches = [...state.liveMatches];
-
-    if (state.liveFilter !== 'all') {
-      matches = matches.filter(m => {
-        const type = (m.event_type_type || '').toLowerCase();
-        if (state.liveFilter === 'atp') return type.includes('atp');
-        if (state.liveFilter === 'wta') return type.includes('wta');
-        return true;
-      });
-    }
-
-    if (matches.length === 0) {
-      container.innerHTML = `
-        <div class="empty-state">
-          <div class="empty-icon">🔍</div>
-          <div class="empty-title">Nessun match live per questo filtro</div>
-        </div>`;
-      return;
-    }
-
-    container.innerHTML = matches.map(match => renderLiveCard(match)).join('');
-  }
-
-  function renderLiveCard(match) {
-    const surface = detectSurface(match.tournament_name || '');
-    const surfaceHtml = surface ? `<span class="surface-badge ${surface}">${surface.toUpperCase()}</span>` : '';
-
-    let scoreHtml = '';
-    if (match.scores && match.scores.length > 0) {
-      scoreHtml = `<div class="match-score">
-        ${match.scores.map(s => {
-          const p1Won = parseInt(s.score_first) > parseInt(s.score_second);
-          return `<div class="set-score ${p1Won ? 'won' : ''}">${s.score_first}-${s.score_second}</div>`;
-        }).join('')}
-      </div>`;
-    }
-
-    const gameScore = match.event_game_result || '';
-    const serving = match.event_serve;
-
-    return `
-      <div class="match-card live">
-        <div class="match-card-header">
-          <span class="match-tournament">
-            ${surfaceHtml}
-            ${match.tournament_name || 'Torneo'}
-          </span>
-          <span class="match-time live">
-            ● ${match.event_status || 'LIVE'}
-          </span>
-        </div>
-
-        <div class="match-players">
-          <div class="player">
-            <span class="player-name">${serving === 'First Player' ? '🎾 ' : ''}${match.event_first_player}</span>
-          </div>
-          <div style="text-align:center">
-            ${scoreHtml}
-            ${gameScore && gameScore !== '-' ? `<div style="font-family:var(--font-mono); font-size:0.9rem; color:var(--gold); margin-top:6px; font-weight:700">${gameScore}</div>` : ''}
-          </div>
-          <div class="player right">
-            <span class="player-name">${serving === 'Second Player' ? '🎾 ' : ''}${match.event_second_player}</span>
-          </div>
-        </div>
-      </div>`;
-  }
-
-  function startLiveUpdates() {
-    loadLive();
-    if (state.liveInterval) clearInterval(state.liveInterval);
-    state.liveInterval = setInterval(loadLive, CONFIG.LIVE_INTERVAL);
-  }
-
-  function stopLiveUpdates() {
-    if (state.liveInterval) {
-      clearInterval(state.liveInterval);
-      state.liveInterval = null;
-    }
-  }
-
-  // ════════════════════════════════════════════
-  //  HEAD-TO-HEAD
-  // ════════════════════════════════════════════
-
-  async function loadH2H() {
-    const p1Input = document.getElementById('h2hPlayer1').value.trim();
-    const p2Input = document.getElementById('h2hPlayer2').value.trim();
-
-    if (!p1Input || !p2Input) return;
-
-    const container = document.getElementById('h2hResultContainer');
-    container.innerHTML = `<div class="loading-state"><div class="loading-spinner"></div><p>Caricamento H2H...</p></div>`;
-
-    // If we have player keys from quick H2H
-    let p1Key = state.h2hPlayer1Key;
-    let p2Key = state.h2hPlayer2Key;
-
-    // Otherwise we'd need player search — for now use keys if set
-    if (!p1Key || !p2Key) {
-      container.innerHTML = `
-        <div class="empty-state">
-          <div class="empty-icon">⚠️</div>
-          <div class="empty-title">Usa il pulsante H2H dalle partite</div>
-          <p class="empty-text">Per ora, clicca il pulsante "🔄 H2H" da una partita del giorno per caricare il confronto diretto.</p>
-        </div>`;
-      return;
-    }
-
-    const data = await apiCall('get_H2H', {
-      first_player_key: p1Key,
-      second_player_key: p2Key,
-    });
-
-    if (data.success === 1 && data.result) {
-      renderH2H(data.result, p1Input, p2Input);
-    } else {
-      container.innerHTML = `
-        <div class="empty-state">
-          <div class="empty-icon">❌</div>
-          <div class="empty-title">H2H non disponibile</div>
-          <p class="empty-text">Non sono stati trovati dati per questo confronto.</p>
-        </div>`;
-    }
-  }
-
-  function quickH2H(p1Key, p2Key, p1Name, p2Name) {
-    state.h2hPlayer1Key = p1Key;
-    state.h2hPlayer2Key = p2Key;
-    document.getElementById('h2hPlayer1').value = p1Name;
-    document.getElementById('h2hPlayer2').value = p2Name;
-    switchTab('h2h');
-    loadH2H();
-  }
-
-  function renderH2H(result, p1Name, p2Name) {
-    const container = document.getElementById('h2hResultContainer');
-    const h2hMatches = result.H2H || [];
-    const p1Results = result.firstPlayerResults || [];
-    const p2Results = result.secondPlayerResults || [];
-
-    // Count H2H wins
-    let p1Wins = 0, p2Wins = 0;
-    h2hMatches.forEach(m => {
-      if (m.event_winner === 'First Player') p1Wins++;
-      else if (m.event_winner === 'Second Player') p2Wins++;
-    });
-
-    // Recent form
-    const p1Form = p1Results.slice(0, 5);
-    const p2Form = p2Results.slice(0, 5);
-
-    container.innerHTML = `
-      <!-- H2H Summary -->
-      <div class="h2h-summary">
-        <div class="h2h-player">
-          <div class="h2h-player-name">${p1Name}</div>
-          <div class="h2h-player-wins">${p1Wins}</div>
-          <div style="font-size:0.8rem; color:var(--text-muted)">vittorie</div>
-        </div>
-        <div class="h2h-divider">
-          <div class="h2h-vs-label">VS</div>
-          <div class="h2h-total">${h2hMatches.length} match</div>
-        </div>
-        <div class="h2h-player">
-          <div class="h2h-player-name">${p2Name}</div>
-          <div class="h2h-player-wins">${p2Wins}</div>
-          <div style="font-size:0.8rem; color:var(--text-muted)">vittorie</div>
+        <div class="analysis-vs"><div class="analysis-vs-label">VS</div><span class="data-quality-badge" style="color:${dq.c}">${dq.l}</span></div>
+        <div class="analysis-player right ${C.fav === 'P2' ? 'favored' : ''}">
+          <div class="analysis-player-name">${p2}</div>
+          <div class="analysis-player-prob">${C.p2.toFixed(1)}%</div>
+          ${M.form.s2 ? `<div class="analysis-player-streak">${M.form.s2}</div>` : ''}
         </div>
       </div>
 
-      <!-- H2H Match History -->
-      ${h2hMatches.length > 0 ? `
-        <h3 style="font-size:1rem; font-weight:600; margin:1.5rem 0 1rem; color:var(--text-secondary);">📜 Precedenti diretti</h3>
-        <div class="match-grid">
-          ${h2hMatches.slice(0, 10).map(m => renderH2HMatchRow(m)).join('')}
+      <div class="consensus-bar-container">
+        <div class="consensus-bar"><div class="consensus-fill p1" style="width:${C.p1}%"></div><div class="consensus-fill p2" style="width:${C.p2}%"></div></div>
+        <div class="consensus-labels"><span>${C.p1.toFixed(1)}%</span><span>${C.p2.toFixed(1)}%</span></div>
+      </div>
+
+      ${T.isTrap ? `<div class="trap-card"><div class="trap-header">🕵️ TRAP DETECTOR — ATTENZIONE</div>${T.flags.map(f => `<div class="trap-flag">${f}</div>`).join('')}</div>` : ''}
+
+      <div class="regression-card tier-${R.tier}">
+        <div class="regression-header"><span class="tier-badge ${R.tier}">${R.tier.toUpperCase()}</span><span class="regression-label">Regression Score</span><span class="regression-score">${R.sc}/100</span></div>
+        <div class="regression-details">
+          <div class="regression-item"><span>Consensus</span><span>${C.conf}%</span></div>
+          <div class="regression-item"><span>Accordo</span><span>${R.agree}%</span></div>
+          <div class="regression-item"><span>Confidenza</span><span>${R.avgC}%</span></div>
+          <div class="regression-item"><span>Modelli</span><span>${C.active}/${C.total}</span></div>
+          <div class="regression-item"><span>Rating</span><span>${'★'.repeat(R.stars)}${'☆'.repeat(5 - R.stars)}</span></div>
         </div>
-      ` : '<p style="color:var(--text-muted); text-align:center; padding:2rem;">Nessun precedente diretto trovato.</p>'}
-
-      <!-- Recent Form P1 -->
-      <h3 style="font-size:1rem; font-weight:600; margin:1.5rem 0 1rem; color:var(--text-secondary);">📊 Ultime partite di ${p1Name}</h3>
-      <div class="match-grid">
-        ${p1Form.map(m => renderFormRow(m)).join('')}
+        ${R.tier !== 'skip' ? `<div class="regression-pick">→ <strong>${fav}</strong> a ${(C.fav === 'P1' ? C.p1 : C.p2).toFixed(1)}%${M.odds.p1O ? ` @ ${(C.fav === 'P1' ? M.odds.p1O : M.odds.p2O)?.toFixed(2) || ''}` : ''}</div>` : ''}
       </div>
 
-      <!-- Recent Form P2 -->
-      <h3 style="font-size:1rem; font-weight:600; margin:1.5rem 0 1rem; color:var(--text-secondary);">📊 Ultime partite di ${p2Name}</h3>
-      <div class="match-grid">
-        ${p2Form.map(m => renderFormRow(m)).join('')}
+      <div class="section-divider"><span>🧠 8 Modelli Predittivi</span></div>
+      <div class="models-grid">
+        ${C.bd.map(b => { const mod = M[b.k]; return `<div class="model-card ${b.active ? '' : 'inactive'}"><div class="model-card-header"><span class="model-icon">${mod?.icon || '📊'}</span><span class="model-name">${b.name}</span>${b.active ? `<span class="model-confidence">${b.conf?.toFixed(0)}%</span>` : '<span class="model-inactive-label">N/D</span>'}</div>${b.active ? `<div class="model-bar"><div class="model-bar-fill" style="width:${b.p1}%;background:${b.p1 >= 50 ? 'var(--accent)' : 'var(--lose)'}"></div></div><div class="model-probs"><span class="${b.p1 >= 50 ? 'favored-prob' : ''}">${b.p1.toFixed(0)}%</span><span class="${b.p1 < 50 ? 'favored-prob' : ''}">${(100 - b.p1).toFixed(0)}%</span></div>` : ''}<div class="model-detail">${mod?.det || ''}</div></div>`; }).join('')}
       </div>
+
+      <div class="section-divider"><span>🏆 Mercati</span></div>
+
+      <div class="market-card">
+        <div class="market-header"><span>${MK.winner.icon} ${MK.winner.name}</span></div>
+        <div class="market-pick"><span class="market-pick-name">${MK.winner.pick}</span><span class="market-pick-prob">${MK.winner.prob}%</span></div>
+        ${MK.winner.kelly ? `<div class="kelly-box">💰 Kelly: <strong>${MK.winner.kelly.quarter}%</strong> del bankroll (¼K) @ ${MK.winner.kelly.odds} | Full Kelly: ${MK.winner.kelly.fraction}%</div>` : ''}
+      </div>
+
+      <div class="market-card">
+        <div class="market-header"><span>${MK.ou.icon} ${MK.ou.name}</span><span class="market-line">Linea: ${MK.ou.line}</span></div>
+        <div class="market-ou-grid">
+          <div class="market-ou-item ${+MK.ou.oP > 50 ? 'highlight' : ''}"><span class="market-ou-label">Over ${MK.ou.line}</span><span class="market-ou-prob">${MK.ou.oP}%</span></div>
+          <div class="market-ou-item ${+MK.ou.uP > 50 ? 'highlight' : ''}"><span class="market-ou-label">Under ${MK.ou.line}</span><span class="market-ou-prob">${MK.ou.uP}%</span></div>
+        </div>
+        <div class="market-detail">Game previsti: <strong>${MK.ou.pred}</strong>${MK.ou.h2hAvg ? ` | Media H2H: <strong>${MK.ou.h2hAvg}</strong>` : ''}</div>
+      </div>
+
+      <div class="market-card">
+        <div class="market-header"><span>${MK.sets.icon} ${MK.sets.name}</span><span class="market-line">Bo${MK.sets.bo}</span></div>
+        <div class="set-score-grid">
+          ${MK.sets.preds.map((x, i) => `<div class="set-score-item ${i === 0 ? 'top-pick' : ''}"><span class="set-score-value">${x.s}</span><div class="set-score-bar-bg"><div class="set-score-bar-fill" style="width:${x.p}%"></div></div><span class="set-score-prob">${x.p}%</span><span class="set-score-favored">${x.f === 'P1' ? p1.split(' ').pop() : p2.split(' ').pop()}</span></div>`).join('')}
+        </div>
+      </div>
+
+      ${h2h && h2h.H2H && h2h.H2H.length ? `
+        <div class="section-divider"><span>⚔️ Precedenti (${h2h.H2H.length})</span></div>
+        <div class="h2h-mini-list">${h2h.H2H.slice(0, 6).map(m => { const sc = m.scores ? m.scores.map(s => `${s.score_first}-${s.score_second}`).join(' ') : m.event_final_result || ''; return `<div class="h2h-mini-row"><span class="h2h-mini-date">${m.event_date || ''}</span><span class="h2h-mini-player ${m.event_winner === 'First Player' ? 'winner' : ''}">${m.event_first_player}</span><span class="h2h-mini-score">${sc}</span><span class="h2h-mini-player right ${m.event_winner === 'Second Player' ? 'winner' : ''}">${m.event_second_player}</span></div>`; }).join('')}</div>` : ''}
     `;
   }
 
-  function renderH2HMatchRow(match) {
-    const scoreStr = match.scores ? match.scores.map(s => `${s.score_first}-${s.score_second}`).join(' ') : match.event_final_result || '';
-    return `
-      <div class="match-card" style="padding:0.8rem 1rem;">
-        <div style="display:flex; justify-content:space-between; align-items:center; font-size:0.82rem;">
-          <span style="color:var(--text-muted); font-family:var(--font-mono); font-size:0.72rem;">${match.event_date || ''}</span>
-          <span style="color:var(--text-dim); font-size:0.72rem;">${match.tournament_name || ''}</span>
-        </div>
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:6px;">
-          <span class="player-name ${match.event_winner === 'First Player' ? 'winner' : ''}" style="font-size:0.88rem;">${match.event_first_player}</span>
-          <span style="font-family:var(--font-mono); color:var(--text-secondary); font-size:0.82rem;">${scoreStr}</span>
-          <span class="player-name ${match.event_winner === 'Second Player' ? 'winner' : ''}" style="font-size:0.88rem;">${match.event_second_player}</span>
-        </div>
-      </div>`;
+  // ════════════════════════════════════════════════════════════
+  //  TOURNAMENT-GROUPED HOME VIEW
+  // ════════════════════════════════════════════════════════════
+
+  async function loadMatches() {
+    const c = document.getElementById('tournamentsContainer');
+    c.innerHTML = `<div class="loading-state"><div class="loading-spinner"></div><p>Caricamento tornei...</p></div>`;
+    const date = dateStr(S.dateOff);
+    const d = await api('fixtures', { date });
+    if (d.success === 1 && d.result && d.result.length) { S.matches = d.result; renderTournaments(); }
+    else { c.innerHTML = `<div class="empty-state"><div class="empty-icon">🎾</div><div class="empty-title">Nessuna partita per ${date}</div></div>`; }
   }
 
-  function renderFormRow(match) {
-    const isWinP1 = match.event_winner === 'First Player';
-    return `
-      <div class="match-card" style="padding:0.7rem 1rem;">
-        <div style="display:flex; justify-content:space-between; align-items:center; font-size:0.8rem;">
-          <span style="color:var(--text-muted); font-family:var(--font-mono); font-size:0.7rem;">${match.event_date || ''}</span>
-          <span style="color:var(--text-dim); font-size:0.7rem;">${match.tournament_name || ''}</span>
-          <span style="font-size:0.7rem; color:${isWinP1 ? 'var(--win)' : 'var(--lose)'}; font-weight:600;">
-            ${match.event_final_result || '-'}
-          </span>
-        </div>
-        <div style="margin-top:4px; font-size:0.82rem;">
-          <span class="${isWinP1 ? 'winner' : ''}" style="color:${isWinP1 ? 'var(--accent)' : 'var(--text-primary)'}">${match.event_first_player}</span>
-          <span style="color:var(--text-dim);"> vs </span>
-          <span class="${!isWinP1 ? 'winner' : ''}" style="color:${!isWinP1 ? 'var(--accent)' : 'var(--text-primary)'}">${match.event_second_player}</span>
-        </div>
-      </div>`;
-  }
+  function renderTournaments() {
+    const c = document.getElementById('tournamentsContainer');
+    let matches = [...S.matches];
 
-  // ════════════════════════════════════════════
-  //  RANKINGS
-  // ════════════════════════════════════════════
+    // Filter
+    if (S.filter !== 'all') {
+      matches = matches.filter(m => {
+        const t = (m.event_type_type || '').toLowerCase();
+        return S.filter === 'atp' ? t.includes('atp') : S.filter === 'wta' ? t.includes('wta') : S.filter === 'challenger' ? t.includes('challenger') : S.filter === 'itf' ? t.includes('itf') : true;
+      });
+    }
 
-  async function loadRankings() {
-    const container = document.getElementById('rankingsContainer');
-    container.innerHTML = `<div class="loading-state"><div class="loading-spinner"></div><p>Caricamento classifiche...</p></div>`;
+    // Group by tournament
+    const grouped = {};
+    matches.forEach(m => {
+      const key = m.tournament_key || m.tournament_name || 'Altro';
+      if (!grouped[key]) grouped[key] = { name: m.tournament_name || 'Torneo', type: m.event_type_type || '', key, matches: [] };
+      grouped[key].matches.push(m);
+    });
 
-    const eventTypeKey = state.rankingType === 'atp' ? CONFIG.EVENT_TYPES.ATP_SINGLES : CONFIG.EVENT_TYPES.WTA_SINGLES;
+    // Sort alphabetically
+    const tournaments = Object.values(grouped).sort((a, b) => a.name.localeCompare(b.name));
 
-    const data = await apiCall('get_standings', { event_type_key: eventTypeKey });
+    if (!tournaments.length) {
+      c.innerHTML = `<div class="empty-state"><div class="empty-icon">🔍</div><div class="empty-title">Nessun torneo con questo filtro</div></div>`;
+      return;
+    }
 
-    if (data.success === 1 && data.result && data.result.length > 0) {
-      renderRankings(data.result);
-    } else {
-      container.innerHTML = `
-        <div class="empty-state">
-          <div class="empty-icon">🏆</div>
-          <div class="empty-title">Classifiche non disponibili</div>
-          <p class="empty-text">Impossibile caricare le classifiche. Riprova più tardi.</p>
+    c.innerHTML = tournaments.map(t => {
+      const surf = detectSurf(t.name);
+      const finished = t.matches.filter(m => m.event_status === 'Finished').length;
+      const upcoming = t.matches.length - finished;
+      const typeLabel = t.type.replace(/Singles|Doubles/gi, '').trim();
+
+      return `
+        <div class="tournament-card" data-tk="${t.key}">
+          <div class="tournament-header" onclick="TP.toggleTournament('${t.key}')">
+            <div class="tournament-info">
+              <span class="surface-badge ${surf}">${surf.toUpperCase()}</span>
+              <span class="tournament-name">${t.name}</span>
+              <span class="tournament-type">${typeLabel}</span>
+            </div>
+            <div class="tournament-meta">
+              <span class="tournament-count">${t.matches.length} match${t.matches.length > 1 ? 'es' : ''}</span>
+              ${upcoming > 0 ? `<span class="tournament-upcoming">${upcoming} da giocare</span>` : ''}
+              <span class="tournament-arrow">▾</span>
+            </div>
+          </div>
+          <div class="tournament-matches" id="tm-${t.key}">
+            ${t.matches.sort((a, b) => {
+              const af = a.event_status === 'Finished' ? 1 : 0, bf = b.event_status === 'Finished' ? 1 : 0;
+              return af !== bf ? af - bf : (a.event_time || '').localeCompare(b.event_time || '');
+            }).map(m => renderMatchRow(m)).join('')}
+          </div>
         </div>`;
+    }).join('');
+  }
+
+  function toggleTournament(tk) {
+    const card = document.querySelector(`[data-tk="${tk}"]`);
+    card.classList.toggle('open');
+  }
+
+  function renderMatchRow(m) {
+    const isF = m.event_status === 'Finished', isL = m.event_live === '1';
+    let scoreHtml = '';
+    if (m.scores && m.scores.length) {
+      scoreHtml = m.scores.map(s => {
+        const w = +s.score_first > +s.score_second;
+        return `<span class="set-score-mini ${w ? 'won' : ''}">${s.score_first}-${s.score_second}</span>`;
+      }).join(' ');
+    }
+
+    let status = '';
+    if (isF) { const w = m.event_winner === 'First Player' ? m.event_first_player : m.event_second_player; status = `<span class="status-badge finished">✓</span>`; }
+    else if (isL) { status = `<span class="status-badge live">LIVE</span>`; }
+    else { status = `<span class="status-badge upcoming">${m.event_time || 'TBD'}</span>`; }
+
+    const click = !isF ? `onclick="TP.openMatch('${m.event_key}')"` : '';
+    const round = m.tournament_round ? m.tournament_round.replace(m.tournament_name || '', '').replace(/^\s*-\s*/, '').trim() : '';
+
+    return `
+      <div class="match-row ${!isF ? 'clickable' : ''} ${isL ? 'live' : ''}" ${click}>
+        <div class="match-row-status">${status}</div>
+        <div class="match-row-players">
+          <span class="match-row-p ${m.event_winner === 'First Player' ? 'winner' : ''}">${m.event_first_player}</span>
+          <span class="match-row-vs">vs</span>
+          <span class="match-row-p ${m.event_winner === 'Second Player' ? 'winner' : ''}">${m.event_second_player}</span>
+        </div>
+        <div class="match-row-score">${scoreHtml}</div>
+        <div class="match-row-round">${round}</div>
+        ${!isF ? '<div class="match-row-cta">📊</div>' : ''}
+      </div>`;
+  }
+
+  // ═══════ LIVE ═══════
+  async function loadLive() {
+    const c = document.getElementById('liveContainer');
+    const d = await api('livescore');
+    if (d.success === 1 && d.result && d.result.length) {
+      S.live = d.result;
+      document.getElementById('liveCount').textContent = d.result.length;
+      document.getElementById('liveCount').style.display = 'inline';
+      renderLive();
+    } else {
+      S.live = []; document.getElementById('liveCount').style.display = 'none';
+      c.innerHTML = `<div class="empty-state"><div class="empty-icon">😴</div><div class="empty-title">Nessun match live</div></div>`;
     }
   }
+  function renderLive() {
+    const c = document.getElementById('liveContainer');
+    let m = [...S.live];
+    if (S.liveFilter !== 'all') m = m.filter(x => (x.event_type_type || '').toLowerCase().includes(S.liveFilter));
+    if (!m.length) { c.innerHTML = `<div class="empty-state"><div class="empty-icon">🔍</div><div class="empty-title">Nessun match live</div></div>`; return; }
+    c.innerHTML = m.map(x => {
+      const sv = x.event_serve;
+      let sH = ''; if (x.scores && x.scores.length) sH = `<div class="match-score">${x.scores.map(s => `<div class="set-score ${+s.score_first > +s.score_second ? 'won' : ''}">${s.score_first}-${s.score_second}</div>`).join('')}</div>`;
+      const gs = x.event_game_result || '';
+      return `<div class="match-card live"><div class="match-card-header"><span class="match-tournament"><span class="surface-badge ${detectSurf(x.tournament_name || '')}">${detectSurf(x.tournament_name || '').toUpperCase()}</span> ${x.tournament_name || ''}</span><span class="match-time live">● ${x.event_status || 'LIVE'}</span></div><div class="match-players"><div class="player"><span class="player-name">${sv === 'First Player' ? '🎾 ' : ''}${x.event_first_player}</span></div><div style="text-align:center">${sH}${gs && gs !== '-' ? `<div style="font-family:var(--font-mono);font-size:1rem;color:var(--gold);margin-top:6px;font-weight:700">${gs}</div>` : ''}</div><div class="player right"><span class="player-name">${sv === 'Second Player' ? '🎾 ' : ''}${x.event_second_player}</span></div></div></div>`;
+    }).join('');
+  }
+  function startLive() { loadLive(); S.liveInt = setInterval(loadLive, CFG.LIVE_MS); }
+  function stopLive() { if (S.liveInt) { clearInterval(S.liveInt); S.liveInt = null; } }
 
-  function renderRankings(standings) {
-    const container = document.getElementById('rankingsContainer');
-
-    // API returns standings — adapt to their structure
-    // Structure may be: [{player_name, player_key, place, points, ...}]
-    const players = standings.slice(0, 100); // top 100
-
-    container.innerHTML = `
-      <table class="rankings-table">
-        <thead>
-          <tr>
-            <th>#</th>
-            <th>Giocatore</th>
-            <th>Punti</th>
-            <th>Torneo</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${players.map((p, i) => {
-            const rank = p.place || p.team_rank || (i + 1);
-            const name = p.player_name || p.team_name || p.first_player || '-';
-            const points = p.points || p.team_points || '-';
-            const tournament = p.tournament_name || p.season || '';
-
-            return `
-              <tr>
-                <td><span class="rank-number ${rank <= 3 ? 'top-3' : ''}">${rank}</span></td>
-                <td>
-                  <div class="player-cell">
-                    <span>${name}</span>
-                  </div>
-                </td>
-                <td><span class="stat-mono">${points}</span></td>
-                <td style="color:var(--text-dim); font-size:0.78rem;">${tournament}</td>
-              </tr>`;
-          }).join('')}
-        </tbody>
-      </table>`;
+  // ═══════ H2H TAB ═══════
+  async function loadH2H() {
+    if (!S.h2hP1Key || !S.h2hP2Key) return;
+    const c = document.getElementById('h2hResultContainer');
+    c.innerHTML = `<div class="loading-state"><div class="loading-spinner"></div></div>`;
+    const d = await getH2H(S.h2hP1Key, S.h2hP2Key);
+    if (!d) { c.innerHTML = `<div class="empty-state"><div class="empty-icon">❌</div><div class="empty-title">H2H non disponibile</div></div>`; return; }
+    const h = d.H2H || []; let w1 = 0, w2 = 0;
+    h.forEach(m => { if (m.event_winner === 'First Player') w1++; else if (m.event_winner === 'Second Player') w2++; });
+    const n1 = document.getElementById('h2hPlayer1').value, n2 = document.getElementById('h2hPlayer2').value;
+    c.innerHTML = `<div class="h2h-summary"><div class="h2h-player"><div class="h2h-player-name">${n1}</div><div class="h2h-player-wins">${w1}</div></div><div class="h2h-divider"><div class="h2h-vs-label">VS</div><div class="h2h-total">${h.length} match</div></div><div class="h2h-player"><div class="h2h-player-name">${n2}</div><div class="h2h-player-wins">${w2}</div></div></div>
+    ${h.length ? `<div class="h2h-mini-list">${h.slice(0, 10).map(m => { const sc = m.scores ? m.scores.map(s => `${s.score_first}-${s.score_second}`).join(' ') : m.event_final_result || ''; return `<div class="h2h-mini-row"><span class="h2h-mini-date">${m.event_date || ''}</span><span class="h2h-mini-player ${m.event_winner === 'First Player' ? 'winner' : ''}">${m.event_first_player}</span><span class="h2h-mini-score">${sc}</span><span class="h2h-mini-player right ${m.event_winner === 'Second Player' ? 'winner' : ''}">${m.event_second_player}</span></div>`; }).join('')}</div>` : ''}`;
   }
 
-  // ─── Utilities ───
-  function toggleExpand(btn) {
-    const card = btn.closest('.match-card');
-    card.classList.toggle('expanded');
-    btn.textContent = card.classList.contains('expanded') ? '▴ Chiudi dettagli' : '▾ Dettagli fattori';
+  // ═══════ RANKINGS ═══════
+  async function loadRankings() {
+    const c = document.getElementById('rankingsContainer');
+    c.innerHTML = `<div class="loading-state"><div class="loading-spinner"></div></div>`;
+    const d = await api('standings', { etk: S.rankType === 'atp' ? CFG.EVENT.ATP : CFG.EVENT.WTA });
+    if (d.success === 1 && d.result && d.result.length) {
+      c.innerHTML = `<table class="rankings-table"><thead><tr><th>#</th><th>Giocatore</th><th>Punti</th></tr></thead><tbody>${d.result.slice(0, 100).map((p, i) => {
+        const rk = p.place || i + 1, nm = p.player_name || p.team_name || '-', pt = p.points || p.team_points || '-';
+        return `<tr><td><span class="rank-number ${rk <= 3 ? 'top-3' : ''}">${rk}</span></td><td>${nm}</td><td class="stat-mono">${pt}</td></tr>`;
+      }).join('')}</tbody></table>`;
+    } else c.innerHTML = `<div class="empty-state"><div class="empty-icon">🏆</div><div class="empty-title">Non disponibile</div></div>`;
   }
 
-  function escapeHtml(str) {
-    return str.replace(/'/g, "\\'").replace(/"/g, '&quot;');
-  }
-
-  // ─── Public API ───
-  return {
-    init,
-    loadH2H,
-    quickH2H,
-    toggleExpand,
-    switchTab,
-  };
-
+  return { init, openMatch, toggleTournament, loadH2H, closeModal, switchTab };
 })();
 
-// Boot
-document.addEventListener('DOMContentLoaded', TennisPro.init);
+document.addEventListener('DOMContentLoaded', TP.init);
