@@ -340,6 +340,33 @@ const TP = (() => {
       const sf = detectSurf(t.name); const up = t.m.filter(x => x.event_status !== 'Finished').length;
       return `<div class="tournament-card open"><div class="tournament-header" onclick="this.parentElement.classList.toggle('open')"><div class="tournament-info"><span class="surface-badge ${sf}">${sf.toUpperCase()}</span><span class="tournament-name">${t.name}</span><span class="tournament-type">${t.type.replace(/Singles|Doubles/gi, '').trim()}</span></div><div class="tournament-meta"><span class="tournament-count">${t.m.length}</span>${up ? `<span class="tournament-upcoming">${up} da giocare</span>` : ''}<span class="tournament-arrow">▾</span></div></div><div class="tournament-matches">${t.m.sort((a, b) => { const af = a.event_status === 'Finished' ? 1 : 0; return af !== (b.event_status === 'Finished' ? 1 : 0) ? af - (b.event_status === 'Finished' ? 1 : 0) : (a.event_time || '').localeCompare(b.event_time || ''); }).map(x => rmr(x)).join('')}</div></div>`;
     }).join('');
+    // Load predictions in background
+    loadQuickPredictions();
+  }
+
+  async function loadQuickPredictions() {
+    const upcoming = S.matches.filter(m => m.event_status !== 'Finished');
+    for (const match of upcoming) {
+      if (S.tab !== 'matches') break; // stop if user switched tab
+      try {
+        const h2h = await getH2H(match.first_player_key, match.second_player_key);
+        const A = runEngine(match, h2h, null);
+        const el = document.getElementById(`pred-${match.event_key}`);
+        if (!el) continue;
+        const C = A.consensus;
+        const R = A.regression;
+        const fav = C.fav === 'P1' ? match.event_first_player.split(' ').pop() : match.event_second_player.split(' ').pop();
+        const prob = Math.round(C.fav === 'P1' ? C.p1 : C.p2);
+        const tier = R.tier;
+        const tierColor = tier === 'gold' ? 'var(--gold)' : tier === 'silver' ? 'var(--silver)' : tier === 'bronze' ? '#d97706' : 'var(--text-dim)';
+        const confLabel = prob >= 65 ? 'Alta' : prob >= 52 ? 'Media' : 'Bassa';
+        const confClass = prob >= 65 ? 'green' : prob >= 52 ? 'yellow' : 'red';
+        el.innerHTML = `<span class="pred-badge ${confClass}" title="${fav} ${prob}% - ${confLabel}"><span class="pred-name">${fav}</span><span class="pred-pct">${prob}%</span></span>`;
+      } catch (e) {
+        const el = document.getElementById(`pred-${match.event_key}`);
+        if (el) el.innerHTML = '';
+      }
+    }
   }
 
   function rmr(m) {
@@ -348,7 +375,9 @@ const TP = (() => {
     let st = isF ? `<span class="status-badge finished">✓</span>` : isL ? `<span class="status-badge live">LIVE</span>` : `<span class="status-badge upcoming">${m.event_time || 'TBD'}</span>`;
     const ek = !isF ? `data-ek="${m.event_key}"` : '';
     const rd = m.tournament_round ? m.tournament_round.replace(m.tournament_name || '', '').replace(/^\s*-\s*/, '').trim() : '';
-    return `<div class="match-row ${!isF ? 'clickable' : ''} ${isL ? 'live' : ''}" ${ek}><div class="match-row-status">${st}</div><div class="match-row-players"><span class="match-row-p ${m.event_winner === 'First Player' ? 'winner' : ''}">${m.event_first_player}</span><span class="match-row-vs">vs</span><span class="match-row-p ${m.event_winner === 'Second Player' ? 'winner' : ''}">${m.event_second_player}</span></div><div class="match-row-score">${sc}</div><div class="match-row-round">${rd}</div>${!isF ? '<div class="match-row-cta">📊</div>' : ''}</div>`;
+    // Prediction badge placeholder for upcoming matches
+    const predBadge = !isF ? `<div class="match-row-pred" id="pred-${m.event_key}"><span class="pred-loading">⏳</span></div>` : '';
+    return `<div class="match-row ${!isF ? 'clickable' : ''} ${isL ? 'live' : ''}" ${ek}><div class="match-row-status">${st}</div><div class="match-row-players"><span class="match-row-p ${m.event_winner === 'First Player' ? 'winner' : ''}">${m.event_first_player}</span><span class="match-row-vs">vs</span><span class="match-row-p ${m.event_winner === 'Second Player' ? 'winner' : ''}">${m.event_second_player}</span></div>${predBadge}<div class="match-row-score">${sc}</div><div class="match-row-round">${rd}</div>${!isF ? '<div class="match-row-cta">📊</div>' : ''}</div>`;
   }
 
   // ═══════ LIVE / H2H / RANKINGS (unchanged) ═══════
