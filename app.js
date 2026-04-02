@@ -73,8 +73,8 @@ const TP = (() => {
   function closeModal() { document.getElementById('modalOverlay').classList.remove('open'); document.body.style.overflow = ''; }
 
   async function openMatch(ek) {
-    const match = S.matches.find(m => m.event_key === ek);
-    if (!match) return;
+    const match = S.matches.find(m => String(m.event_key) === String(ek));
+    if (!match) { console.warn('Match not found:', ek); return; }
     document.body.style.overflow = 'hidden';
     const ov = document.getElementById('modalOverlay'), ct = document.getElementById('modalContent');
     ov.classList.add('open');
@@ -681,11 +681,12 @@ const TP = (() => {
     else if (isL) { status = `<span class="status-badge live">LIVE</span>`; }
     else { status = `<span class="status-badge upcoming">${m.event_time || 'TBD'}</span>`; }
 
-    const click = !isF ? `data-ek="${m.event_key}"` : '';
+    const ek = m.event_key;
+    const clickAttr = !isF ? `data-ek="${ek}" onclick="TP.openMatch('${ek}')"` : '';
     const round = m.tournament_round ? m.tournament_round.replace(m.tournament_name || '', '').replace(/^\s*-\s*/, '').trim() : '';
 
     return `
-      <div class="match-row ${!isF ? 'clickable' : ''} ${isL ? 'live' : ''}" ${click}>
+      <div class="match-row ${!isF ? 'clickable' : ''} ${isL ? 'live' : ''}" ${clickAttr}>
         <div class="match-row-status">${status}</div>
         <div class="match-row-players">
           <span class="match-row-p ${m.event_winner === 'First Player' ? 'winner' : ''}">${m.event_first_player}</span>
