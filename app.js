@@ -204,6 +204,30 @@ const TP = (() => {
     // ── SCORE + MODELS ──
     html += `<div class="ap-section"><div class="ap-gauge-row"><div class="ap-gauge"><div class="ap-gauge-value" style="color:${gc}">${R.sc}</div><div class="ap-gauge-label">/100</div><div class="ap-gauge-tier" style="border-color:${gc};color:${gc}">${tl}</div></div><div class="ap-scores-list">${C.bd.filter(b => b.active).map(b => `<div class="ap-score-row"><span class="ap-score-icon">${M[b.k]?.icon || '📊'}</span><span class="ap-score-name">${b.name}</span><div class="ap-score-bar"><div class="ap-score-bar-fill" style="width:${b.p1}%;background:${b.p1 >= 55 ? 'var(--accent)' : b.p1 >= 45 ? 'var(--gold)' : 'var(--lose)'}"></div></div><span class="ap-score-val" style="color:${b.p1 >= 55 ? 'var(--accent)' : b.p1 >= 45 ? 'var(--gold)' : 'var(--lose)'}">${Math.round(b.p1)}</span></div>`).join('')}</div></div></div>`;
 
+    // ── ODDS LAB — REGRESSIONE QUOTE ──
+    if (M.odds.p1O && M.odds.p2O) {
+      const q1 = M.odds.p1O, q2 = M.odds.p2O;
+      const imp1 = 1 / q1, imp2 = 1 / q2;
+      const margin = ((imp1 + imp2 - 1) * 100).toFixed(1);
+      const fairP1 = (imp1 / (imp1 + imp2) * 100), fairP2 = 100 - fairP1;
+      const ourP1 = C.p1, ourP2 = C.p2;
+      const deltaP1 = ourP1 - fairP1, deltaP2 = ourP2 - fairP2;
+      const valueP1 = deltaP1 > 3, valueP2 = deltaP2 > 3;
+      const anyValue = valueP1 || valueP2;
+      const valueBadge = anyValue ? `<span class="ap-badge-green" style="background:rgba(52,211,153,0.15)">💎 ${valueP1 && valueP2 ? '2 VALUE' : '1 VALUE'}</span>` : `<span style="font-size:0.72rem;color:var(--text-dim)">Margine: ${margin}%</span>`;
+
+      html += `<div class="ap-section">
+        <div class="ap-section-header"><span>📊 Odds Lab — Regressione Quote</span>${valueBadge}</div>
+        <div class="odds-grid">
+          <div class="odds-col head"><div class="odds-cell label"></div><div class="odds-cell label">Quota</div><div class="odds-cell label">Prob. Bookie</div><div class="odds-cell label">Prob. Modello</div><div class="odds-cell label">Δ Edge</div><div class="odds-cell label">Verdetto</div></div>
+          <div class="odds-col ${valueP1 ? 'value' : ''}"><div class="odds-cell player">${p1.split(' ').pop()}</div><div class="odds-cell quota">${q1.toFixed(2)}</div><div class="odds-cell">${fairP1.toFixed(1)}%</div><div class="odds-cell our">${ourP1.toFixed(1)}%</div><div class="odds-cell delta ${deltaP1 > 0 ? 'pos' : 'neg'}">${deltaP1 > 0 ? '+' : ''}${deltaP1.toFixed(1)}%</div><div class="odds-cell verdict">${valueP1 ? '<span class="value-tag">💎 VALUE</span>' : deltaP1 > 0 ? '<span class="fair-tag">Fair</span>' : '<span class="no-tag">No Value</span>'}</div></div>
+          <div class="odds-col ${valueP2 ? 'value' : ''}"><div class="odds-cell player">${p2.split(' ').pop()}</div><div class="odds-cell quota">${q2.toFixed(2)}</div><div class="odds-cell">${fairP2.toFixed(1)}%</div><div class="odds-cell our">${ourP2.toFixed(1)}%</div><div class="odds-cell delta ${deltaP2 > 0 ? 'pos' : 'neg'}">${deltaP2 > 0 ? '+' : ''}${deltaP2.toFixed(1)}%</div><div class="odds-cell verdict">${valueP2 ? '<span class="value-tag">💎 VALUE</span>' : deltaP2 > 0 ? '<span class="fair-tag">Fair</span>' : '<span class="no-tag">No Value</span>'}</div></div>
+        </div>
+        ${anyValue ? `<div class="odds-value-msg">${valueP1 ? `VALUE ${p1.split(' ').pop()}: Il modello dà ${ourP1.toFixed(1)}% vs Bookie ${fairP1.toFixed(1)}% (Δ+${deltaP1.toFixed(1)}). Quota @${q1.toFixed(2)} interessante.` : `VALUE ${p2.split(' ').pop()}: Il modello dà ${ourP2.toFixed(1)}% vs Bookie ${fairP2.toFixed(1)}% (Δ+${deltaP2.toFixed(1)}). Quota @${q2.toFixed(2)} interessante.`}</div>` : ''}
+        <div class="odds-margin">Margine Bookmaker: ${margin}% • Fair Odds: ${(1 / (fairP1 / 100)).toFixed(2)} / ${(1 / (fairP2 / 100)).toFixed(2)}</div>
+      </div>`;
+    }
+
     // ── SMART MONEY ──
     if (M.smartMoney.signal) {
       const smColor = M.smartMoney.signal === 'CONFERMA' ? 'var(--accent)' : M.smartMoney.signal === 'DIVERGENZA' ? 'var(--trap)' : 'var(--text-muted)';
