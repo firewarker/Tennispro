@@ -11,7 +11,7 @@
 
   <header class="header">
     <div class="header-inner">
-      <a href="#" class="logo">
+      <a href="#" class="logo" onclick="TP.goHome();return false">
         <div class="logo-icon">🎾</div>
         <div class="logo-text">Tennis<span>Pro</span></div>
       </a>
@@ -26,9 +26,9 @@
     <button class="nav-tab" data-tab="rankings">🏆 Classifiche</button>
   </nav>
 
-  <main class="main">
+  <main class="main" id="mainContent">
 
-    <!-- TAB: Partite per Torneo -->
+    <!-- HOME: Tournament list -->
     <section class="tab-content active" id="tab-matches">
       <div class="section-header">
         <h2 class="section-title"><span class="icon">📊</span> Pronostici del Giorno</h2>
@@ -50,63 +50,36 @@
       </div>
     </section>
 
-    <!-- TAB: Live -->
+    <!-- ANALYSIS: Full page match view (hidden by default) -->
+    <section class="tab-content" id="tab-analysis">
+      <div id="analysisPage"></div>
+    </section>
+
+    <!-- Live / H2H / Rankings tabs unchanged -->
     <section class="tab-content" id="tab-live">
-      <div class="section-header">
-        <h2 class="section-title"><span class="icon">⚡</span> Live Score</h2>
-        <div class="filter-bar">
-          <button class="filter-btn active" data-live-filter="all">Tutti</button>
-          <button class="filter-btn" data-live-filter="atp">ATP</button>
-          <button class="filter-btn" data-live-filter="wta">WTA</button>
-        </div>
+      <div class="section-header"><h2 class="section-title"><span class="icon">⚡</span> Live Score</h2>
+        <div class="filter-bar"><button class="filter-btn active" data-live-filter="all">Tutti</button><button class="filter-btn" data-live-filter="atp">ATP</button><button class="filter-btn" data-live-filter="wta">WTA</button></div>
       </div>
-      <div id="liveContainer">
-        <div class="loading-state"><div class="loading-spinner"></div><p>Caricamento live...</p></div>
-      </div>
+      <div id="liveContainer"><div class="loading-state"><div class="loading-spinner"></div></div></div>
     </section>
 
-    <!-- TAB: H2H -->
     <section class="tab-content" id="tab-h2h">
-      <div class="section-header">
-        <h2 class="section-title"><span class="icon">🔄</span> Head-to-Head</h2>
-      </div>
-      <div class="h2h-search">
-        <div class="input-group"><label>Giocatore 1</label><input type="text" id="h2hPlayer1" placeholder="Nome..." autocomplete="off"></div>
-        <div class="input-group"><label>Giocatore 2</label><input type="text" id="h2hPlayer2" placeholder="Nome..." autocomplete="off"></div>
-        <button class="btn-primary" onclick="TP.loadH2H()">Confronta</button>
-      </div>
-      <div id="h2hResultContainer">
-        <div class="empty-state"><div class="empty-icon">🔄</div><div class="empty-title">Seleziona due giocatori</div><p class="empty-text">Clicca su un match per caricare l'H2H automaticamente.</p></div>
-      </div>
+      <div class="section-header"><h2 class="section-title"><span class="icon">🔄</span> Head-to-Head</h2></div>
+      <div class="h2h-search"><div class="input-group"><label>Giocatore 1</label><input type="text" id="h2hPlayer1" placeholder="Nome..." autocomplete="off"></div><div class="input-group"><label>Giocatore 2</label><input type="text" id="h2hPlayer2" placeholder="Nome..." autocomplete="off"></div><button class="btn-primary" onclick="TP.loadH2H()">Confronta</button></div>
+      <div id="h2hResultContainer"><div class="empty-state"><div class="empty-icon">🔄</div><div class="empty-title">Seleziona due giocatori</div></div></div>
     </section>
 
-    <!-- TAB: Classifiche -->
     <section class="tab-content" id="tab-rankings">
-      <div class="section-header">
-        <h2 class="section-title"><span class="icon">🏆</span> Classifiche</h2>
-        <div class="filter-bar">
-          <button class="filter-btn active" data-ranking="atp">ATP</button>
-          <button class="filter-btn" data-ranking="wta">WTA</button>
-        </div>
+      <div class="section-header"><h2 class="section-title"><span class="icon">🏆</span> Classifiche</h2>
+        <div class="filter-bar"><button class="filter-btn active" data-ranking="atp">ATP</button><button class="filter-btn" data-ranking="wta">WTA</button></div>
       </div>
-      <div id="rankingsContainer"><div class="loading-state"><div class="loading-spinner"></div><p>Caricamento...</p></div></div>
+      <div id="rankingsContainer"><div class="loading-state"><div class="loading-spinner"></div></div></div>
     </section>
 
   </main>
 
-  <!-- MODAL ANALISI -->
-  <div class="modal-overlay" id="modalOverlay">
-    <div class="modal-container">
-      <div class="modal-top-bar">
-        <div class="modal-top-bar-title">🧠 Analisi Match</div>
-        <button class="modal-close" id="modalClose">✕</button>
-      </div>
-      <div class="modal-body" id="modalContent"></div>
-    </div>
-  </div>
-
   <footer style="text-align:center;padding:2rem;color:var(--text-dim);font-size:0.75rem;border-top:1px solid var(--border);">
-    <p>TennisPro v3.0 — 8 Modelli Predittivi + Consensus Engine + Trap Detector</p>
+    <p>TennisPro v4.0 — 8 Modelli + Consensus + Trap Detector</p>
     <p style="margin-top:4px;">© 2026 TennisPro · Dati: API-Tennis.com · Solo scopo informativo</p>
   </footer>
 
