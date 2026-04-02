@@ -2,7 +2,7 @@
  * TennisPro v3.0 — app.js
  * 8-Model Prediction Engine + Consensus + Regression + Trap Detector + Kelly
  */
-const TP = window.TP = (() => {
+const TP = (() => {
 
   const CFG = {
     WORKER: 'https://tennispro.lucalagan.workers.dev',
@@ -28,6 +28,11 @@ const TP = window.TP = (() => {
     document.querySelectorAll('[data-ranking]').forEach(b => b.addEventListener('click', () => { document.querySelectorAll('[data-ranking]').forEach(x => x.classList.remove('active')); b.classList.add('active'); S.rankType = b.dataset.ranking; loadRankings(); }));
     document.getElementById('modalOverlay').addEventListener('click', e => { if (e.target.id === 'modalOverlay') closeModal(); });
     document.getElementById('modalClose').addEventListener('click', closeModal);
+    // Event delegation for match clicks
+    document.getElementById('tournamentsContainer').addEventListener('click', e => {
+      const row = e.target.closest('.match-row[data-ek]');
+      if (row) { e.stopPropagation(); openMatch(row.dataset.ek); }
+    });
     loadMatches();
     loadRankings();
   }
@@ -68,7 +73,7 @@ const TP = window.TP = (() => {
   function closeModal() { document.getElementById('modalOverlay').classList.remove('open'); document.body.style.overflow = ''; }
 
   async function openMatch(ek) {
-    const match = S.matches.find(m => String(m.eventkey) === String(ek));
+    const match = S.matches.find(m => m.event_key === ek);
     if (!match) return;
     document.body.style.overflow = 'hidden';
     const ov = document.getElementById('modalOverlay'), ct = document.getElementById('modalContent');
@@ -637,8 +642,8 @@ const TP = window.TP = (() => {
       const typeLabel = t.type.replace(/Singles|Doubles/gi, '').trim();
 
       return `
-        <div class="tournament-card" data-tk="${t.key}">
-          <div class="tournament-header" onclick="TP.toggleTournament('${t.key}')">
+        <div class="tournament-card open" data-tk="${t.key}">
+          <div class="tournament-header" onclick="this.parentElement.classList.toggle('open')">
             <div class="tournament-info">
               <span class="surface-badge ${surf}">${surf.toUpperCase()}</span>
               <span class="tournament-name">${t.name}</span>
@@ -660,10 +665,6 @@ const TP = window.TP = (() => {
     }).join('');
   }
 
-  function toggleTournament(tk) {
-    const card = document.querySelector(`[data-tk="${tk}"]`);
-    card.classList.toggle('open');
-  }
 
   function renderMatchRow(m) {
     const isF = m.event_status === 'Finished', isL = m.event_live === '1';
@@ -680,7 +681,7 @@ const TP = window.TP = (() => {
     else if (isL) { status = `<span class="status-badge live">LIVE</span>`; }
     else { status = `<span class="status-badge upcoming">${m.event_time || 'TBD'}</span>`; }
 
-    const click = !isF ? `onclick="TP.openMatch('${m.event_key}')"` : '';
+    const click = !isF ? `data-ek="${m.event_key}"` : '';
     const round = m.tournament_round ? m.tournament_round.replace(m.tournament_name || '', '').replace(/^\s*-\s*/, '').trim() : '';
 
     return `
@@ -753,7 +754,7 @@ const TP = window.TP = (() => {
     } else c.innerHTML = `<div class="empty-state"><div class="empty-icon">🏆</div><div class="empty-title">Non disponibile</div></div>`;
   }
 
-  return { init, openMatch, toggleTournament, loadH2H, closeModal, switchTab };
+  return { init, openMatch, loadH2H, closeModal, switchTab };
 })();
 
 document.addEventListener('DOMContentLoaded', TP.init);
