@@ -10,7 +10,7 @@ const TP = (() => {
     WTS: { elo: 0.16, surface: 0.12, form: 0.15, h2h: 0.11, dominance: 0.09, serve: 0.09, fatigue: 0.07, odds: 0.11, smartMoney: 0.10 },
     GPS: { clay: 10.2, grass: 9.6, hard: 9.8, indoor: 9.7, unknown: 9.9 },
   };
-  let S = { tab: 'matches', dOff: 0, flt: 'all', lFlt: 'all', rk: 'atp', lInt: null, matches: [], live: [], hc: {}, oc: {}, acc: { hit: 0, miss: 0, total: 0 } };
+  let S = { tab: 'matches', dOff: 0, flt: 'all', lFlt: 'all', rk: 'atp', lInt: null, matches: [], live: [], hc: {}, oc: {}, acc: { hit: 0, miss: 0, total: 0 }, theodds: null, theoddsLoading: false };
 
   // ═══ INIT ═══
   function init() {
@@ -22,6 +22,7 @@ const TP = (() => {
     document.querySelectorAll('[data-ranking]').forEach(b => b.addEventListener('click', () => { document.querySelectorAll('[data-ranking]').forEach(x => x.classList.remove('active')); b.classList.add('active'); S.rk = b.dataset.ranking; loadRank(); }));
     document.getElementById('tournamentsContainer').addEventListener('click', e => { const r = e.target.closest('.match-row[data-ek]'); if (r) openMatch(r.dataset.ek); });
     loadMatches(); loadRank();
+    loadTheOdds(); // Load The Odds API in background
   }
 
   function ds(o = 0) { const d = new Date(); d.setDate(d.getDate() + o); return d.toISOString().split('T')[0]; }
@@ -39,6 +40,76 @@ const TP = (() => {
   async function gh(p1, p2) { const k = `${p1}_${p2}`; if (S.hc[k]) return S.hc[k]; const d = await api('h2h', { p1, p2 }); if (d.success === 1 && d.result) { S.hc[k] = d.result; return d.result; } return null; }
   async function go(ek) { if (S.oc[ek]) return S.oc[ek]; const d = await api('odds', { mk: ek }); if (d.success === 1 && d.result) { S.oc[ek] = d.result; return d.result; } return null; }
 
+  // ═══ THE ODDS API ═══
+  async function loadTheOdds() {
+    if (S.theoddsLoading) return;
+    S.theoddsLoading = true;
+    try {
+      const r = await fetch(`${CFG.W}/theodds/all?regions=eu`);
+      const d = await r.json();
+      if (d.success === 1 && d.odds) {
+        S.theodds = d.odds;
+        console.log(`TheOddsAPI: ${d.total} matches from ${d.sports} tournaments loaded (remaining: ${d.remaining})`);
+      }
+    } catch (e) { console.warn('TheOddsAPI load failed:', e); }
+    S.theoddsLoading = false;
+  }
+
+  // Fuzzy match player names: "S. Baez" vs "Sebastian Baez"
+  function normName(n) { return n.toLowerCase().replace(/[^a-z]/g, ''); }
+  function matchScore(a, b) {
+    const na = normName(a), nb = normName(b);
+    if (na === nb) return 100;
+    // Check if surname matches
+    const surnA = a.split(' ').pop().toLowerCase(), surnB = b.split(' ').pop().toLowerCase();
+    if (surnA === surnB) return 80;
+    // Partial surname match
+    if (surnA.includes(surnB) || surnB.includes(surnA)) return 60;
+    return 0;
+  }
+
+  function findTheOdds(p1Name, p2Name) {
+    if (!S.theodds || !S.theodds.length) return null;
+    let best = null, bestScore = 0;
+    for (const m of S.theodds) {
+      const s1 = Math.max(matchScore(p1Name, m.home_team), matchScore(p1Name, m.away_team));
+      const s2 = Math.max(matchScore(p2Name, m.home_team), matchScore(p2Name, m.away_team));
+      const total = s1 + s2;
+      if (total > bestScore && s1 >= 60 && s2 >= 60) {
+        bestScore = total; best = m;
+      }
+    }
+    if (!best) return null;
+    // Parse bookmaker odds
+    const bks = [];
+    let bestH2H = null;
+    let bestTotals = null;
+    for (const bk of (best.bookmakers || [])) {
+      for (const mkt of (bk.markets || [])) {
+        if (mkt.key === 'h2h' && mkt.outcomes && mkt.outcomes.length >= 2) {
+          const o = {};
+          mkt.outcomes.forEach(oc => {
+            const isP1 = matchScore(p1Name, oc.name) >= 60;
+            if (isP1) o.p1 = oc.price; else o.p2 = oc.price;
+          });
+          if (o.p1 && o.p2) {
+            bks.push({ name: bk.title || bk.key, p1: o.p1, p2: o.p2 });
+            if (!bestH2H) bestH2H = o;
+          }
+        }
+        if (mkt.key === 'totals' && mkt.outcomes && mkt.outcomes.length >= 2) {
+          const t = {};
+          mkt.outcomes.forEach(oc => {
+            if (oc.name === 'Over') { t.over = oc.price; t.line = oc.point; }
+            if (oc.name === 'Under') { t.under = oc.price; t.line = oc.point; }
+          });
+          if (t.over && t.under && !bestTotals) bestTotals = t;
+        }
+      }
+    }
+    return { match: best, bookmakers: bks, h2h: bestH2H, totals: bestTotals, count: bks.length };
+  }
+
   // ═══ OPEN MATCH (both finished and upcoming) ═══
   async function openMatch(ek) {
     const match = S.matches.find(m => String(m.event_key) === String(ek));
@@ -50,7 +121,9 @@ const TP = (() => {
     const pg = document.getElementById('analysisPage');
     pg.innerHTML = `<div class="loading-state"><div class="loading-spinner"></div><p>🧠 Analisi in corso...</p></div>`;
     const [h2h, odds] = await Promise.all([gh(match.first_player_key, match.second_player_key), go(match.event_key)]);
-    const A = engine(match, h2h, odds);
+    // Find The Odds API data for this match
+    const theodds = findTheOdds(match.event_first_player, match.event_second_player);
+    const A = engine(match, h2h, odds, theodds);
     pg.innerHTML = renderPage(match, A, h2h);
     window.scrollTo(0, 0);
   }
@@ -58,34 +131,69 @@ const TP = (() => {
   // ══════════════════════════════════════════════
   //  🧠 ENGINE v5 — 9 MODELS
   // ══════════════════════════════════════════════
-  function engine(match, h2h, odds) {
+  function engine(match, h2h, odds, theodds) {
     const sf = dSurf(match.tournament_name || ''), bo5 = isSl(match.tournament_name || '');
     const M = {};
     M.elo = mElo(h2h, match); M.surface = mSurf(h2h, match, sf); M.form = mForm(h2h, match);
     M.h2h = mH2H(h2h, match); M.dominance = mDom(h2h, match); M.serve = mSrv(h2h, match);
-    M.fatigue = mFat(h2h, match); M.odds = mOdds(odds); M.smartMoney = mSmart(odds, M);
+    M.fatigue = mFat(h2h, match);
+    // Use The Odds API if available, fallback to API-Tennis odds
+    M.odds = theodds && theodds.h2h ? mOddsTheOdds(theodds) : mOdds(odds);
+    M.smartMoney = theodds ? mSmartTheOdds(theodds, M) : mSmart(odds, M);
     const C = consensus(M), R = regression(M, C), T = trap(M, C);
     const MK = markets(C, match, h2h, sf, bo5, M.odds);
-    // Verify result for finished matches
-    let verify = null;
-    if (match.event_status === 'Finished' && match.event_winner) {
-      const predFav = C.fav === 'P1' ? 'First Player' : 'Second Player';
-      verify = {
-        actual: match.event_winner,
-        predicted: predFav,
-        hit: match.event_winner === predFav,
-        actualName: match.event_winner === 'First Player' ? match.event_first_player : match.event_second_player,
-        scores: match.scores || [],
-        totalGames: (match.scores || []).reduce((s, sc) => s + (+sc.score_first || 0) + (+sc.score_second || 0), 0),
-        ouHit: null,
-      };
-      if (MK.ou) { verify.ouHit = MK.ou.pick.includes('Over') ? verify.totalGames > MK.ou.line : MK.ou.pick.includes('Under') ? verify.totalGames < MK.ou.line : null; }
-      // Set score check
-      const actualSets = (match.scores || []).reduce((acc, sc) => { if (+sc.score_first > +sc.score_second) acc.p1++; else acc.p2++; return acc; }, { p1: 0, p2: 0 });
-      verify.actualSetScore = `${actualSets.p1}-${actualSets.p2}`;
-      verify.setHit = MK.sets.preds[0]?.s === verify.actualSetScore;
-    }
-    return { M, C, R, T, MK, sf, bo5, dq: dqual(M), verify };
+    const verify = verifyResult(match, C, MK);
+    return { M, C, R, T, MK, sf, bo5, dq: dqual(M), verify, theodds };
+  }
+
+  // The Odds API — Odds Model
+  function mOddsTheOdds(td) {
+    const r = { name: 'Quote', icon: '💰', p1: 50, conf: 0, det: '', p1O: null, p2O: null, bks: [] };
+    if (!td || !td.h2h) return r;
+    r.p1O = td.h2h.p1; r.p2O = td.h2h.p2;
+    r.bks = td.bookmakers || [];
+    const i1 = 1 / td.h2h.p1, i2 = 1 / td.h2h.p2;
+    r.p1 = (i1 / (i1 + i2)) * 100;
+    r.conf = cl((i1 + i2 - 1) * 200 + 40, 20, 95);
+    r.det = `${td.h2h.p1.toFixed(2)} / ${td.h2h.p2.toFixed(2)} (${td.count} book)`;
+    r.totals = td.totals || null;
+    return r;
+  }
+
+  // The Odds API — Smart Money Model
+  function mSmartTheOdds(td, M) {
+    const r = { name: 'Smart Money', icon: '🧠', p1: 50, conf: 0, det: '', signal: null };
+    if (!td || !td.bookmakers || td.bookmakers.length < 2) return r;
+    const p1Probs = td.bookmakers.map(b => { const i1 = 1 / b.p1, i2 = 1 / b.p2; return (i1 / (i1 + i2)) * 100; });
+    const avg = p1Probs.reduce((a, b) => a + b) / p1Probs.length;
+    const spread = Math.max(...p1Probs) - Math.min(...p1Probs);
+    r.p1 = cl(avg, 8, 92);
+    r.conf = cl(90 - spread * 2.5, 15, 92);
+    const ourFav = M.elo.conf > 0 ? (M.elo.p1 >= 50 ? 'P1' : 'P2') : null;
+    const moneyFav = avg >= 50 ? 'P1' : 'P2';
+    if (ourFav && ourFav === moneyFav && spread < 6) { r.signal = 'CONFERMA'; r.det = `${td.count} book concordi (spread ${spread.toFixed(1)}%)`; }
+    else if (ourFav && ourFav !== moneyFav) { r.signal = 'DIVERGENZA'; r.det = `Soldi vs Modelli (spread ${spread.toFixed(1)}%)`; }
+    else { r.signal = 'NEUTRO'; r.det = `Spread ${spread.toFixed(1)}% su ${td.count} book`; }
+    return r;
+  }
+
+  function verifyResult(match, C, MK) {
+    if (match.event_status !== 'Finished' || !match.event_winner) return null;
+    const predFav = C.fav === 'P1' ? 'First Player' : 'Second Player';
+    const verify = {
+      actual: match.event_winner,
+      predicted: predFav,
+      hit: match.event_winner === predFav,
+      actualName: match.event_winner === 'First Player' ? match.event_first_player : match.event_second_player,
+      scores: match.scores || [],
+      totalGames: (match.scores || []).reduce((s, sc) => s + (+sc.score_first || 0) + (+sc.score_second || 0), 0),
+      ouHit: null,
+    };
+    if (MK.ou) { verify.ouHit = MK.ou.pick.includes('Over') ? verify.totalGames > MK.ou.line : MK.ou.pick.includes('Under') ? verify.totalGames < MK.ou.line : null; }
+    const actualSets = (match.scores || []).reduce((acc, sc) => { if (+sc.score_first > +sc.score_second) acc.p1++; else acc.p2++; return acc; }, { p1: 0, p2: 0 });
+    verify.actualSetScore = `${actualSets.p1}-${actualSets.p2}`;
+    verify.setHit = MK.sets.preds[0]?.s === verify.actualSetScore;
+    return verify;
   }
 
   // Models
@@ -204,28 +312,47 @@ const TP = (() => {
     // ── SCORE + MODELS ──
     html += `<div class="ap-section"><div class="ap-gauge-row"><div class="ap-gauge"><div class="ap-gauge-value" style="color:${gc}">${R.sc}</div><div class="ap-gauge-label">/100</div><div class="ap-gauge-tier" style="border-color:${gc};color:${gc}">${tl}</div></div><div class="ap-scores-list">${C.bd.filter(b => b.active).map(b => `<div class="ap-score-row"><span class="ap-score-icon">${M[b.k]?.icon || '📊'}</span><span class="ap-score-name">${b.name}</span><div class="ap-score-bar"><div class="ap-score-bar-fill" style="width:${b.p1}%;background:${b.p1 >= 55 ? 'var(--accent)' : b.p1 >= 45 ? 'var(--gold)' : 'var(--lose)'}"></div></div><span class="ap-score-val" style="color:${b.p1 >= 55 ? 'var(--accent)' : b.p1 >= 45 ? 'var(--gold)' : 'var(--lose)'}">${Math.round(b.p1)}</span></div>`).join('')}</div></div></div>`;
 
-    // ── ODDS LAB — REGRESSIONE QUOTE ──
-    if (M.odds.p1O && M.odds.p2O) {
-      const q1 = M.odds.p1O, q2 = M.odds.p2O;
-      const imp1 = 1 / q1, imp2 = 1 / q2;
-      const margin = ((imp1 + imp2 - 1) * 100).toFixed(1);
-      const fairP1 = (imp1 / (imp1 + imp2) * 100), fairP2 = 100 - fairP1;
+    // ── ODDS LAB — REGRESSIONE QUOTE (always visible) ──
+    {
+      const hasOdds = M.odds.p1O && M.odds.p2O;
       const ourP1 = C.p1, ourP2 = C.p2;
-      const deltaP1 = ourP1 - fairP1, deltaP2 = ourP2 - fairP2;
-      const valueP1 = deltaP1 > 3, valueP2 = deltaP2 > 3;
-      const anyValue = valueP1 || valueP2;
-      const valueBadge = anyValue ? `<span class="ap-badge-green" style="background:rgba(52,211,153,0.15)">💎 ${valueP1 && valueP2 ? '2 VALUE' : '1 VALUE'}</span>` : `<span style="font-size:0.72rem;color:var(--text-dim)">Margine: ${margin}%</span>`;
+      // Calculate fair odds from our model
+      const modelQ1 = (1 / (ourP1 / 100)).toFixed(2), modelQ2 = (1 / (ourP2 / 100)).toFixed(2);
 
-      html += `<div class="ap-section">
-        <div class="ap-section-header"><span>📊 Odds Lab — Regressione Quote</span>${valueBadge}</div>
-        <div class="odds-grid">
-          <div class="odds-col head"><div class="odds-cell label"></div><div class="odds-cell label">Quota</div><div class="odds-cell label">Prob. Bookie</div><div class="odds-cell label">Prob. Modello</div><div class="odds-cell label">Δ Edge</div><div class="odds-cell label">Verdetto</div></div>
-          <div class="odds-col ${valueP1 ? 'value' : ''}"><div class="odds-cell player">${p1.split(' ').pop()}</div><div class="odds-cell quota">${q1.toFixed(2)}</div><div class="odds-cell">${fairP1.toFixed(1)}%</div><div class="odds-cell our">${ourP1.toFixed(1)}%</div><div class="odds-cell delta ${deltaP1 > 0 ? 'pos' : 'neg'}">${deltaP1 > 0 ? '+' : ''}${deltaP1.toFixed(1)}%</div><div class="odds-cell verdict">${valueP1 ? '<span class="value-tag">💎 VALUE</span>' : deltaP1 > 0 ? '<span class="fair-tag">Fair</span>' : '<span class="no-tag">No Value</span>'}</div></div>
-          <div class="odds-col ${valueP2 ? 'value' : ''}"><div class="odds-cell player">${p2.split(' ').pop()}</div><div class="odds-cell quota">${q2.toFixed(2)}</div><div class="odds-cell">${fairP2.toFixed(1)}%</div><div class="odds-cell our">${ourP2.toFixed(1)}%</div><div class="odds-cell delta ${deltaP2 > 0 ? 'pos' : 'neg'}">${deltaP2 > 0 ? '+' : ''}${deltaP2.toFixed(1)}%</div><div class="odds-cell verdict">${valueP2 ? '<span class="value-tag">💎 VALUE</span>' : deltaP2 > 0 ? '<span class="fair-tag">Fair</span>' : '<span class="no-tag">No Value</span>'}</div></div>
-        </div>
-        ${anyValue ? `<div class="odds-value-msg">${valueP1 ? `VALUE ${p1.split(' ').pop()}: Il modello dà ${ourP1.toFixed(1)}% vs Bookie ${fairP1.toFixed(1)}% (Δ+${deltaP1.toFixed(1)}). Quota @${q1.toFixed(2)} interessante.` : `VALUE ${p2.split(' ').pop()}: Il modello dà ${ourP2.toFixed(1)}% vs Bookie ${fairP2.toFixed(1)}% (Δ+${deltaP2.toFixed(1)}). Quota @${q2.toFixed(2)} interessante.`}</div>` : ''}
-        <div class="odds-margin">Margine Bookmaker: ${margin}% • Fair Odds: ${(1 / (fairP1 / 100)).toFixed(2)} / ${(1 / (fairP2 / 100)).toFixed(2)}</div>
-      </div>`;
+      if (hasOdds) {
+        const q1 = M.odds.p1O, q2 = M.odds.p2O;
+        const imp1 = 1 / q1, imp2 = 1 / q2;
+        const margin = ((imp1 + imp2 - 1) * 100).toFixed(1);
+        const fairP1 = (imp1 / (imp1 + imp2) * 100), fairP2 = 100 - fairP1;
+        const deltaP1 = ourP1 - fairP1, deltaP2 = ourP2 - fairP2;
+        const valueP1 = deltaP1 > 3, valueP2 = deltaP2 > 3;
+        const anyValue = valueP1 || valueP2;
+        const valueBadge = anyValue ? `<span class="ap-badge-green" style="background:rgba(52,211,153,0.15)">💎 ${valueP1 && valueP2 ? '2 VALUE' : '1 VALUE'}</span>` : `<span style="font-size:0.72rem;color:var(--text-dim)">Margine: ${margin}%</span>`;
+
+        html += `<div class="ap-section">
+          <div class="ap-section-header"><span>📊 Odds Lab — Regressione Quote</span>${valueBadge}</div>
+          <div class="odds-table">
+            <div class="odds-header"><span></span><span>Quota</span><span>Prob. Book</span><span>Prob. Modello</span><span>Δ Edge</span><span>Verdetto</span></div>
+            <div class="odds-row ${valueP1 ? 'value' : ''}"><span class="odds-name">${p1.split(' ').pop()}</span><span class="odds-q">${q1.toFixed(2)}</span><span>${fairP1.toFixed(1)}%</span><span class="odds-our">${ourP1.toFixed(1)}%</span><span class="odds-delta ${deltaP1 > 0 ? 'pos' : 'neg'}">${deltaP1 > 0 ? '+' : ''}${deltaP1.toFixed(1)}%</span><span>${valueP1 ? '<span class="value-tag">💎 VALUE</span>' : deltaP1 > 0 ? '<span class="fair-tag">Fair</span>' : '<span class="no-tag">No Value</span>'}</span></div>
+            <div class="odds-row ${valueP2 ? 'value' : ''}"><span class="odds-name">${p2.split(' ').pop()}</span><span class="odds-q">${q2.toFixed(2)}</span><span>${fairP2.toFixed(1)}%</span><span class="odds-our">${ourP2.toFixed(1)}%</span><span class="odds-delta ${deltaP2 > 0 ? 'pos' : 'neg'}">${deltaP2 > 0 ? '+' : ''}${deltaP2.toFixed(1)}%</span><span>${valueP2 ? '<span class="value-tag">💎 VALUE</span>' : deltaP2 > 0 ? '<span class="fair-tag">Fair</span>' : '<span class="no-tag">No Value</span>'}</span></div>
+          </div>
+          ${anyValue ? `<div class="odds-value-msg">${valueP1 ? `VALUE ${p1.split(' ').pop()}: Modello ${ourP1.toFixed(1)}% vs Bookie ${fairP1.toFixed(1)}% (Δ+${deltaP1.toFixed(1)}). Quota @${q1.toFixed(2)} interessante.` : `VALUE ${p2.split(' ').pop()}: Modello ${ourP2.toFixed(1)}% vs Bookie ${fairP2.toFixed(1)}% (Δ+${deltaP2.toFixed(1)}). Quota @${q2.toFixed(2)} interessante.`}</div>` : ''}
+          <div class="odds-margin">Margine Bookmaker: ${margin}% • Fair Odds: ${(1 / (fairP1 / 100)).toFixed(2)} / ${(1 / (fairP2 / 100)).toFixed(2)}</div>
+          ${M.odds.bks && M.odds.bks.length > 1 ? `<div class="odds-bk-title">📋 Comparazione ${M.odds.bks.length} Bookmaker</div><div class="odds-bk-list">${M.odds.bks.slice(0, 10).map(b => `<div class="odds-bk-row"><span class="odds-bk-name">${b.name}</span><span class="odds-bk-q">${b.p1.toFixed(2)}</span><span class="odds-bk-q">${b.p2.toFixed(2)}</span></div>`).join('')}</div>` : ''}
+        </div>`;
+      } else {
+        // No bookmaker odds — show model-generated fair odds
+        html += `<div class="ap-section">
+          <div class="ap-section-header"><span>📊 Odds Lab — Fair Odds Modello</span><span style="font-size:0.72rem;color:var(--text-dim)">Quote bookmaker N/D</span></div>
+          <div class="odds-table">
+            <div class="odds-header cols4"><span></span><span>Fair Quota</span><span>Prob. Modello</span><span>Confidenza</span></div>
+            <div class="odds-row ${ourP1 > ourP2 ? 'value' : ''}"><span class="odds-name">${p1.split(' ').pop()}</span><span class="odds-q">${modelQ1}</span><span class="odds-our">${ourP1.toFixed(1)}%</span><span>${ourP1 > 55 ? '<span class="value-tag">📈 Favorito</span>' : ourP1 > 45 ? '<span class="fair-tag">Equilibrato</span>' : '<span class="no-tag">Sfavorito</span>'}</span></div>
+            <div class="odds-row ${ourP2 > ourP1 ? 'value' : ''}"><span class="odds-name">${p2.split(' ').pop()}</span><span class="odds-q">${modelQ2}</span><span class="odds-our">${ourP2.toFixed(1)}%</span><span>${ourP2 > 55 ? '<span class="value-tag">📈 Favorito</span>' : ourP2 > 45 ? '<span class="fair-tag">Equilibrato</span>' : '<span class="no-tag">Sfavorito</span>'}</span></div>
+          </div>
+          <div class="odds-value-msg" style="background:rgba(245,158,11,0.08);border-color:var(--gold);color:var(--gold)">⚠️ Quote bookmaker non disponibili. Le Fair Odds sono calcolate dal consensus dei 9 modelli. Cerca quota ≥ ${ourP1 > ourP2 ? modelQ1 : modelQ2} su ${ourP1 > ourP2 ? p1.split(' ').pop() : p2.split(' ').pop()} per avere value.</div>
+          <div class="odds-margin">Fair Odds Modello: ${modelQ1} / ${modelQ2} • Margine: 0% (no vig)</div>
+        </div>`;
+      }
     }
 
     // ── SMART MONEY ──
@@ -301,7 +428,7 @@ const TP = (() => {
       if (S.tab !== 'matches') break;
       try {
         const h2h = await gh(match.first_player_key, match.second_player_key);
-        const A = engine(match, h2h, null);
+        const A = engine(match, h2h, null, findTheOdds(match.event_first_player, match.event_second_player));
         const el = document.getElementById(`pred-${match.event_key}`);
         if (!el) continue;
         const C = A.C, R = A.R;
