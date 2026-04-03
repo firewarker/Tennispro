@@ -16,11 +16,15 @@
   <nav class="nav-tabs">
     <button class="nav-tab active" data-tab="matches">📊 Partite</button>
     <button class="nav-tab" data-tab="live">⚡ Live <span class="tab-badge" id="liveCount" style="display:none">0</span></button>
+    <button class="nav-tab" data-tab="bankroll">💰 Bankroll</button>
     <button class="nav-tab" data-tab="rankings">🏆 Classifiche</button>
   </nav>
 
-  <main class="main" id="mainContent">
+  <main class="main">
+    <!-- HOME -->
     <section class="tab-content active" id="tab-matches">
+      <!-- Top Picks -->
+      <div id="topPicksContainer" style="display:none"></div>
       <div class="section-header">
         <h2 class="section-title"><span class="icon">📊</span> Pronostici del Giorno</h2>
         <div class="date-selector">
@@ -29,7 +33,6 @@
           <button class="date-btn" data-offset="1">Domani</button>
         </div>
       </div>
-      <!-- Accuracy Tracker -->
       <div class="accuracy-bar" id="accuracyBar" style="display:none"></div>
       <div class="filter-bar">
         <button class="filter-btn active" data-filter="all">Tutti</button>
@@ -38,11 +41,13 @@
         <button class="filter-btn" data-filter="challenger">Challenger</button>
         <button class="filter-btn" data-filter="itf">ITF</button>
       </div>
-      <div id="tournamentsContainer"><div class="loading-state"><div class="loading-spinner"></div><p>Caricamento tornei...</p></div></div>
+      <div id="tournamentsContainer"><div class="loading-state"><div class="loading-spinner"></div><p>Caricamento...</p></div></div>
     </section>
 
+    <!-- ANALYSIS PAGE -->
     <section class="tab-content" id="tab-analysis"><div id="analysisPage"></div></section>
 
+    <!-- LIVE -->
     <section class="tab-content" id="tab-live">
       <div class="section-header"><h2 class="section-title"><span class="icon">⚡</span> Live Score</h2>
         <div class="filter-bar"><button class="filter-btn active" data-live-filter="all">Tutti</button><button class="filter-btn" data-live-filter="atp">ATP</button><button class="filter-btn" data-live-filter="wta">WTA</button></div>
@@ -50,6 +55,15 @@
       <div id="liveContainer"><div class="loading-state"><div class="loading-spinner"></div></div></div>
     </section>
 
+    <!-- BANKROLL -->
+    <section class="tab-content" id="tab-bankroll">
+      <div class="section-header"><h2 class="section-title"><span class="icon">💰</span> Bankroll Manager</h2></div>
+      <div id="bankrollDashboard"></div>
+      <div class="section-header" style="margin-top:1.5rem"><h2 class="section-title" style="font-size:1rem">📋 Storico Scommesse</h2></div>
+      <div id="bankrollHistory"></div>
+    </section>
+
+    <!-- RANKINGS -->
     <section class="tab-content" id="tab-rankings">
       <div class="section-header"><h2 class="section-title"><span class="icon">🏆</span> Classifiche</h2>
         <div class="filter-bar"><button class="filter-btn active" data-ranking="atp">ATP</button><button class="filter-btn" data-ranking="wta">WTA</button></div>
@@ -58,9 +72,9 @@
     </section>
   </main>
 
-  <footer style="text-align:center;padding:2rem;color:var(--text-dim);font-size:0.75rem;border-top:1px solid var(--border);">
-    <p>TennisPro v5.0 — 9 Modelli + Consensus + Smart Money + Trap Detector</p>
-    <p style="margin-top:4px">© 2026 TennisPro · Dati: API-Tennis.com · Solo scopo informativo</p>
+  <footer style="text-align:center;padding:2rem;color:var(--text-dim);font-size:0.72rem;border-top:1px solid var(--border)">
+    <p>TennisPro v6.0 — 9 Modelli + Rankings Reali + Bankroll Manager + Smart Money</p>
+    <p style="margin-top:4px">© 2026 TennisPro · Solo scopo informativo</p>
   </footer>
   <script src="app.js"></script>
 </body>
