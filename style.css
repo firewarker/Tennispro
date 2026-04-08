@@ -55,6 +55,18 @@
 .prono-pick-prob{font-family:var(--mono);font-size:0.9rem;color:var(--accent);font-weight:600;margin-bottom:4px}
 .prono-pick-odds{font-family:var(--mono);font-size:0.82rem;color:var(--gold)}
 .prono-pick-detail{font-size:0.78rem;color:var(--t3);margin-top:6px}
+.prono-reasons{padding:12px 16px;border-top:1px solid var(--brd);background:rgba(52,211,153,0.02)}.prono-card.main .prono-reasons{background:rgba(52,211,153,0.04)}
+.prono-reasons-title{font-size:0.72rem;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px}
+.prono-reason{font-size:0.8rem;color:var(--t2);padding:4px 0;line-height:1.4}
+.prono-alts{padding:10px 16px;border-top:1px solid var(--brd);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.prono-alt-chip{font-family:var(--mono);font-size:0.72rem;font-weight:600;padding:4px 10px;background:var(--sf);border-radius:12px;color:var(--t2);border:1px solid var(--brd)}
+.prono-grid.three{grid-template-columns:1fr 1fr 1fr}
+.prono-card.sm .prono-card-body{padding:14px 12px}
+.prono-pick-value.sm{font-size:1.1rem}
+.prono-sets-mini{display:flex;flex-direction:column;gap:4px}
+.prono-set-chip{display:flex;justify-content:space-between;align-items:center;padding:5px 10px;font-family:var(--mono);font-size:0.78rem;color:var(--t2);background:var(--sf);border-radius:var(--rs)}
+.prono-set-chip.top{color:var(--accent);background:var(--ag);border:1px solid var(--ba)}
+.prono-set-chip strong{font-weight:700}
 .prono-hc-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px}.prono-hc-item{display:flex;justify-content:space-between;padding:8px 12px;background:var(--sf);border-radius:var(--rs);font-size:0.8rem;color:var(--t2);border:1px solid transparent}.prono-hc-item.active{border-color:var(--accent);background:var(--ag)}.prono-hc-item.active strong{color:var(--accent)}.prono-hc-item strong{font-family:var(--mono);font-weight:700}
 
 /* Sets */
@@ -82,5 +94,5 @@
 .rankings-table{width:100%;border-collapse:separate;border-spacing:0;background:var(--card);border:1px solid var(--brd);border-radius:var(--rl);overflow:hidden}.rankings-table thead th{font-size:0.72rem;font-weight:600;color:var(--t3);text-transform:uppercase;padding:12px 16px;background:var(--sf);border-bottom:1px solid var(--brd);text-align:left}.rankings-table tbody td{padding:12px 16px;font-size:0.85rem;border-bottom:1px solid var(--brd)}.rankings-table tbody tr:hover td{background:var(--card2)}.rankings-table tbody tr:last-child td{border-bottom:none}.rank-number{font-family:var(--mono);font-weight:700;color:var(--t2)}.rank-number.top-3{color:var(--gold)}.stat-mono{font-family:var(--mono);font-size:0.82rem;color:var(--t2)}
 
 /* Responsive */
-@media(max-width:768px){html{font-size:14px}.header-date{display:none}.main{padding:1rem}.prono-grid{grid-template-columns:1fr}.ap-matchup{padding:18px;gap:10px}.ap-player-name{font-size:1.1rem}.ap-tach-row{grid-template-columns:110px 1fr;gap:12px}.tach-svg{width:110px}.ap-model-row{grid-template-columns:18px 1fr 70px 24px}.ap-stake-grid{grid-template-columns:1fr}.ap-sets-grid{grid-template-columns:repeat(2,1fr)}.consensus-chips{grid-template-columns:1fr}.match-row{grid-template-columns:45px 1fr auto auto;gap:6px;padding:10px 12px}.mr-cta{display:none}.mr-p{max-width:110px;font-size:0.82rem}}
+@media(max-width:768px){html{font-size:14px}.header-date{display:none}.main{padding:1rem}.prono-grid{grid-template-columns:1fr}.prono-grid.three{grid-template-columns:1fr}.ap-matchup{padding:18px;gap:10px}.ap-player-name{font-size:1.1rem}.ap-tach-row{grid-template-columns:110px 1fr;gap:12px}.tach-svg{width:110px}.ap-model-row{grid-template-columns:18px 1fr 70px 24px}.ap-stake-grid{grid-template-columns:1fr}.ap-sets-grid{grid-template-columns:repeat(2,1fr)}.consensus-chips{grid-template-columns:1fr}.match-row{grid-template-columns:45px 1fr auto auto;gap:6px;padding:10px 12px}.mr-cta{display:none}.mr-p{max-width:110px;font-size:0.82rem}}
 @media(max-width:480px){.ap-tach-row{grid-template-columns:1fr}.ap-prob-bar{height:28px;font-size:0.78rem}.prono-hc-grid{grid-template-columns:1fr}.mr-score{display:none}.pred-name{max-width:50px}.tp-vs{display:none}}

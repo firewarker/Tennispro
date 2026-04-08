@@ -6,7 +6,7 @@ const TP = (() => {
   const CFG = {
     W: 'https://tennispro.lucalagan.workers.dev',
     LIVE_MS: 30000,
-    WTS: { elo: 0.15, surface: 0.12, form: 0.14, h2h: 0.10, clutch: 0.09, serve: 0.09, fatigue: 0.07, odds: 0.12, smartMoney: 0.12 },
+    WTS: { elo: 0.13, surface: 0.11, form: 0.12, h2h: 0.09, clutch: 0.08, dominance: 0.07, serve: 0.08, fatigue: 0.06, odds: 0.13, smartMoney: 0.13 },
     GPS: { clay: 10.2, grass: 9.6, hard: 9.8, indoor: 9.7, unknown: 9.9 },
   };
   let S = {
@@ -267,7 +267,8 @@ const TP = (() => {
     M.surface = mSurfM(h2h, match, sf);  // Same but with clean results
     M.form = mFormAdv(h2h, match);       // Exponential decay + momentum
     M.h2h = mH2H(h2h, match);           // Same but retirement-safe
-    M.clutch = mClutch(stats1, stats2);  // NEW: Tiebreak + Decisive sets
+    M.clutch = mClutch(stats1, stats2);  // Tiebreak + Decisive sets
+    M.dominance = mDomAdv(stats1, stats2); // Game margin + straight sets
     M.serve = mSrvAdv(stats1, stats2);   // Improved from match stats
     M.fatigue = mFat(h2h, match, rd);    // With round pressure
     M.odds = td && td.h2h ? mOddsTD(td) : { name: 'Quote', icon: '💰', p1: 50, conf: 0, det: 'N/D', p1O: null, p2O: null, bks: [] };
@@ -369,7 +370,29 @@ const TP = (() => {
     return r;
   }
 
-  // ═══ MODEL 6: Serve — Advanced from match stats ═══
+  // ═══ MODEL 6: Dominance — Game margin + Straight sets ═══
+  function mDomAdv(s1, s2) {
+    const r = { name: 'Dominio', icon: '💪', p1: 50, conf: 0, det: '' };
+    if (!s1 || !s2 || !s1.matchCount || !s2.matchCount) return r;
+    // Game margin: how many more games you win than lose
+    const gm1 = (s1.gamesWon - s1.gamesLost) / Math.max(s1.setsPlayed, 1);
+    const gm2 = (s2.gamesWon - s2.gamesLost) / Math.max(s2.setsPlayed, 1);
+    // Straight set win rate (among wins)
+    const ss1 = s1.totalWins > 0 ? s1.straightSetWins / s1.totalWins : 0;
+    const ss2 = s2.totalWins > 0 ? s2.straightSetWins / s2.totalWins : 0;
+    // Set win ratio
+    const sr1 = s1.setsWon / Math.max(s1.setsWon + s1.setsLost, 1);
+    const sr2 = s2.setsWon / Math.max(s2.setsWon + s2.setsLost, 1);
+    // Blend: 40% game margin, 30% straight set rate, 30% set win ratio
+    const d1 = (gm1 / 3) * 0.4 + ss1 * 0.3 + sr1 * 0.3;
+    const d2 = (gm2 / 3) * 0.4 + ss2 * 0.3 + sr2 * 0.3;
+    r.p1 = cl(50 + (d1 - d2) * 50, 10, 90);
+    r.conf = cl((s1.matchCount + s2.matchCount) * 5, 0, 85);
+    r.det = `Mg ${gm1 > 0 ? '+' : ''}${gm1.toFixed(1)} vs ${gm2 > 0 ? '+' : ''}${gm2.toFixed(1)}`;
+    return r;
+  }
+
+  // ═══ MODEL 7: Serve — Advanced from match stats ═══
   function mSrvAdv(s1, s2) {
     const r = { name: 'Servizio', icon: '🎯', p1: 50, conf: 0, det: '' };
     if (!s1 || !s2 || !s1.holdSets || !s2.holdSets) return r;
@@ -396,7 +419,7 @@ const TP = (() => {
   function mSmartTD(td, M) { const r = { name: 'Smart Money', icon: '🧠', p1: 50, conf: 0, det: '', signal: null }; const ps = td.bookmakers.map(b => (1 / b.p1) / (1 / b.p1 + 1 / b.p2) * 100); const avg = ps.reduce((a, b) => a + b) / ps.length; const sp = Math.max(...ps) - Math.min(...ps); r.p1 = cl(avg, 8, 92); r.conf = cl(90 - sp * 2.5, 15, 92); const of = M.elo.p1 >= 50 ? 'P1' : 'P2'; const mf = avg >= 50 ? 'P1' : 'P2'; r.signal = of === mf && sp < 6 ? 'CONFERMA' : of !== mf ? 'DIVERGENZA' : 'NEUTRO'; r.det = `${td.count} book, spread ${sp.toFixed(1)}%`; return r; }
 
   // Consensus + Regression + Trap
-  function calcC(M) { let ws = 0, wt = 0, ac = 0; const bd = []; Object.entries(CFG.WTS).forEach(([k, w]) => { const m = M[k]; if (!m || m.conf === 0) { bd.push({ k, name: m?.name || k, p1: 50, active: false }); return; } const ew = w * (m.conf / 100); ws += m.p1 * ew; wt += ew; ac++; bd.push({ k, name: m.name, icon: m.icon, p1: m.p1, w: ew, conf: m.conf, active: true }); }); const cp = wt > 0 ? ws / wt : 50; return { p1: cl(cp, 2, 98), p2: cl(100 - cp, 2, 98), conf: (Math.abs(cp - 50) * 2).toFixed(0), fav: cp >= 50 ? 'P1' : 'P2', ac, total: 9, bd }; }
+  function calcC(M) { let ws = 0, wt = 0, ac = 0; const bd = []; Object.entries(CFG.WTS).forEach(([k, w]) => { const m = M[k]; if (!m || m.conf === 0) { bd.push({ k, name: m?.name || k, p1: 50, active: false }); return; } const ew = w * (m.conf / 100); ws += m.p1 * ew; wt += ew; ac++; bd.push({ k, name: m.name, icon: m.icon, p1: m.p1, w: ew, conf: m.conf, active: true }); }); const cp = wt > 0 ? ws / wt : 50; return { p1: cl(cp, 2, 98), p2: cl(100 - cp, 2, 98), conf: (Math.abs(cp - 50) * 2).toFixed(0), fav: cp >= 50 ? 'P1' : 'P2', ac, total: 10, bd }; }
   function calcR(M, C, rw) { const ag = mAg(M); const ac = C.bd.filter(b => b.active).reduce((s, b) => s + (b.conf || 0), 0) / Math.max(C.ac, 1); let sc = +C.conf * 0.35 + ag * 0.35 + ac * 0.30; sc = cl(sc * (rw || 1), 0, 100); return { sc: sc.toFixed(1), tier: sc >= 72 ? 'gold' : sc >= 52 ? 'silver' : sc >= 32 ? 'bronze' : 'skip', stars: sc >= 82 ? 5 : sc >= 67 ? 4 : sc >= 52 ? 3 : sc >= 37 ? 2 : 1, ag: ag.toFixed(0), ac: ac.toFixed(0) }; }
   function mAg(M) { const p = Object.values(M).filter(m => m && m.conf > 0).map(m => m.p1 >= 50 ? 'P1' : 'P2'); if (!p.length) return 0; return (Math.max(p.filter(x => x === 'P1').length, p.filter(x => x === 'P2').length) / p.length) * 100; }
   function calcT(M, C) { const f = []; if (M.odds.conf > 0 && Math.abs(M.odds.p1 - C.p1) > 18) f.push('Quote vs consensus divergono'); if (M.form.conf > 0 && M.h2h.conf > 0 && (M.form.p1 >= 50 ? 'P1' : 'P2') !== (M.h2h.p1 >= 50 ? 'P1' : 'P2')) f.push('Forma e H2H discordano'); if (M.fatigue.conf > 0 && Math.abs(M.fatigue.p1 - 50) > 15 && (M.fatigue.p1 > 50 ? 'P2' : 'P1') === C.fav) f.push('Favorito stanco'); if (mAg(M) < 65 && +C.conf > 40) f.push('Modelli divisi'); if (M.smartMoney.signal === 'DIVERGENZA') f.push('Smart Money diverge'); return { is: f.length >= 2, sc: Math.min(f.length * 18 + 10, 100), fl: f }; }
@@ -569,27 +592,56 @@ const TP = (() => {
     // TACHIMETER + MODELS
     h += `<div class="ap-section"><div class="ap-section-header"><span>⚡ Pressione Pre-Match</span><span style="color:${gc};font-family:var(--font-mono);font-size:0.78rem;font-weight:700">${tl}</span></div><div class="ap-tach-row"><div class="ap-tach">${tachSVG(pred.score)}</div><div class="ap-models-list">${C.bd.filter(b => b.active).map(b => `<div class="ap-model-row"><span class="ap-model-icon">${M[b.k]?.icon}</span><span class="ap-model-name">${b.name}</span><div class="ap-model-bar"><div class="ap-model-fill" style="width:${b.p1}%;background:${b.p1 >= 55 ? '#34d399' : b.p1 >= 45 ? '#f59e0b' : '#f87171'}"></div></div><span class="ap-model-val" style="color:${b.p1 >= 55 ? '#34d399' : b.p1 >= 45 ? '#f59e0b' : '#f87171'}">${Math.round(b.p1)}</span></div>`).join('')}</div></div></div>`;
 
-    // ══════ PRONOSTICI — BettingPro style 2-column cards ══════
-    h += `<div class="prono-grid">`;
-    // Card 1: Consiglio AI (Vincente)
+    // ══════ PRONOSTICI — BettingPro style with reasoning ══════
     const confCls = +fp >= 65 ? 'alta' : +fp >= 52 ? 'media' : 'bassa';
-    h += `<div class="prono-card main"><div class="prono-card-header"><span class="prono-card-icon">🎾</span><span class="prono-card-title">Pronostico Vincente</span><span class="prono-conf-badge ${confCls}">✓ ${confCls.charAt(0).toUpperCase() + confCls.slice(1)}</span></div><div class="prono-card-body"><div class="prono-pick-label">PRONOSTICO CONSIGLIATO</div><div class="prono-pick-value">${fav}</div><div class="prono-pick-prob">${(+fp).toFixed(0)}% probabilità</div>${A.MK.winner.kelly ? `<div class="prono-pick-odds">@ ${A.MK.winner.kelly.o}</div>` : ''}</div></div>`;
-    // Card 2: Over/Under
     const ouPred = pred.ou || A.MK.ou;
-    h += `<div class="prono-card"><div class="prono-card-header"><span class="prono-card-icon">📊</span><span class="prono-card-title">Over/Under Game</span></div><div class="prono-card-body"><div class="prono-pick-label">PRONOSTICO</div><div class="prono-pick-value">${ouPred.pick}</div><div class="prono-pick-prob">${ouPred.prob}% probabilità</div><div class="prono-pick-detail">Previsti: ${ouPred.pred}${ouPred.ha ? ` • H2H: ${ouPred.ha}` : ''}</div></div></div>`;
-    h += `</div>`; // end prono-grid
-
-    // Card 3: First Set + Handicap
     const fsPred = pred.firstSet || A.MK.firstSet;
     const hcPred = pred.handicap || A.MK.handicap;
+
+    // Generate reasoning from model data
+    const reasons = [];
+    const activeM = C.bd.filter(b => b.active).sort((a, b) => Math.abs(b.p1 - 50) - Math.abs(a.p1 - 50));
+    activeM.slice(0, 3).forEach(b => {
+      const favors = b.p1 >= 50 ? fav.split(' ').pop() : unfav.split(' ').pop();
+      const str = Math.abs(b.p1 - 50) > 20 ? '✅' : Math.abs(b.p1 - 50) > 8 ? '🟡' : '⚪';
+      reasons.push(`${str} ${M[b.k]?.icon || ''} ${b.name}: favorisce ${favors} (${Math.round(Math.max(b.p1, 100 - b.p1))}%)`);
+    });
+
     h += `<div class="prono-grid">`;
-    h += `<div class="prono-card"><div class="prono-card-header"><span class="prono-card-icon">🏅</span><span class="prono-card-title">Primo Set</span></div><div class="prono-card-body"><div class="prono-pick-label">VINCENTE 1° SET</div><div class="prono-pick-value">${fsPred.pick}</div><div class="prono-pick-prob">${fsPred.prob}%</div></div></div>`;
-    h += `<div class="prono-card"><div class="prono-card-header"><span class="prono-card-icon">📐</span><span class="prono-card-title">Handicap Set</span></div><div class="prono-card-body"><div class="prono-hc-grid"><div class="prono-hc-item ${+hcPred.favMinus.prob > 50 ? 'active' : ''}"><span>${hcPred.favMinus.label}</span><strong>${hcPred.favMinus.prob}%</strong></div><div class="prono-hc-item ${+hcPred.undPlus.prob > 50 ? 'active' : ''}"><span>${hcPred.undPlus.label}</span><strong>${hcPred.undPlus.prob}%</strong></div></div></div></div>`;
+    // Card 1: AI Consiglio (full BettingPro style)
+    h += `<div class="prono-card main">
+      <div class="prono-card-header"><span class="prono-card-icon">🎾</span><span class="prono-card-title">Consiglio AI</span><span class="prono-conf-badge ${confCls}">✓ ${confCls.charAt(0).toUpperCase() + confCls.slice(1)}</span></div>
+      <div class="prono-card-body">
+        <div class="prono-pick-label">PRONOSTICO CONSIGLIATO</div>
+        <div class="prono-pick-value">${fav}</div>
+        <div class="prono-pick-prob">${(+fp).toFixed(0)}% probabilità</div>
+        ${A.MK.winner.kelly ? `<div class="prono-pick-odds">@ ${A.MK.winner.kelly.o} • Stake ${A.MK.winner.kelly.q}%</div>` : ''}
+      </div>
+      <div class="prono-reasons"><div class="prono-reasons-title">💡 PERCHÉ QUESTO PRONOSTICO</div>${reasons.map(r => `<div class="prono-reason">${r}</div>`).join('')}</div>
+      <div class="prono-alts"><span style="font-size:0.72rem;color:var(--t3)">Alternative:</span>${fsPred ? `<span class="prono-alt-chip">1° Set ${fsPred.pick.split(' ').pop()} ${fsPred.prob}%</span>` : ''}${hcPred ? `<span class="prono-alt-chip">${+hcPred.favMinus.prob > 50 ? hcPred.favMinus.label : hcPred.undPlus.label} ${Math.max(+hcPred.favMinus.prob, +hcPred.undPlus.prob)}%</span>` : ''}</div>
+    </div>`;
+
+    // Card 2: Pronostico Statistico (O/U)
+    h += `<div class="prono-card">
+      <div class="prono-card-header"><span class="prono-card-icon">📊</span><span class="prono-card-title">Pronostico Statistico</span><span class="prono-conf-badge ${+ouPred.prob >= 70 ? 'alta' : +ouPred.prob >= 55 ? 'media' : 'bassa'}">🔥 ${+ouPred.prob >= 70 ? 'Alta' : +ouPred.prob >= 55 ? 'Media' : 'Bassa'}</span></div>
+      <div class="prono-card-body">
+        <div class="prono-pick-label">PROB. PIÙ ALTA</div>
+        <div class="prono-pick-value">${ouPred.pick}</div>
+        <div class="prono-pick-prob">${ouPred.prob}% probabilità</div>
+        <div class="prono-pick-detail">Previsti: ${ouPred.pred}${ouPred.ha ? ` • H2H: ${ouPred.ha}` : ''}</div>
+      </div>
+      <div class="prono-reasons"><div class="prono-reasons-title">📋 DETTAGLI</div><div class="prono-reason">✅ Mercato: O/U ${ouPred.line}</div><div class="prono-reason">📊 Over ${ouPred.oP}% | Under ${ouPred.uP}%</div><div class="prono-reason">🧮 Basato su 10 modelli + H2H</div></div>
+      <div class="prono-alts"><span style="font-size:0.72rem;color:var(--t3)">Top alternative:</span><span class="prono-alt-chip">${ouPred.pick.includes('Over') ? `Under ${ouPred.line}` : `Over ${ouPred.line}`} ${ouPred.pick.includes('Over') ? ouPred.uP : ouPred.oP}%</span></div>
+    </div>`;
     h += `</div>`;
 
-    // Set Score
+    // Row 2: First Set + Handicap + Set Score
+    h += `<div class="prono-grid three">`;
+    h += `<div class="prono-card sm"><div class="prono-card-header"><span class="prono-card-icon">🏅</span><span class="prono-card-title">Primo Set</span></div><div class="prono-card-body"><div class="prono-pick-value sm">${fsPred.pick}</div><div class="prono-pick-prob">${fsPred.prob}%</div></div></div>`;
+    h += `<div class="prono-card sm"><div class="prono-card-header"><span class="prono-card-icon">📐</span><span class="prono-card-title">Handicap Set</span></div><div class="prono-card-body"><div class="prono-hc-grid"><div class="prono-hc-item ${+hcPred.favMinus.prob > 50 ? 'active' : ''}"><span>${hcPred.favMinus.label}</span><strong>${hcPred.favMinus.prob}%</strong></div><div class="prono-hc-item ${+hcPred.undPlus.prob > 50 ? 'active' : ''}"><span>${hcPred.undPlus.label}</span><strong>${hcPred.undPlus.prob}%</strong></div></div></div></div>`;
     const setPreds = pred.sets || A.MK.sets.preds;
-    h += `<div class="ap-section"><div class="ap-section-header"><span>🎯 Risultato Set</span></div><div class="ap-sets-grid">${setPreds.map((x, i) => `<div class="ap-set-chip ${i === 0 ? 'top' : ''}"><div class="ap-set-score">${x.s}</div><div class="ap-set-prob">${x.p}%</div><div class="ap-set-who">${x.f === 'P1' ? p1.split(' ').pop() : p2.split(' ').pop()}</div></div>`).join('')}</div></div>`;
+    h += `<div class="prono-card sm"><div class="prono-card-header"><span class="prono-card-icon">🎯</span><span class="prono-card-title">Set Score</span></div><div class="prono-card-body"><div class="prono-sets-mini">${setPreds.slice(0, 3).map((x, i) => `<span class="prono-set-chip ${i === 0 ? 'top' : ''}">${x.s} <strong>${x.p}%</strong></span>`).join('')}</div></div></div>`;
+    h += `</div>`;
 
     // Trap
     if (T.is) h += `<div class="ap-section ap-trap"><div class="ap-section-header"><span>🕵️ Trap Detector</span><span class="ap-badge-orange">${T.sc}/100</span></div>${T.fl.map(f => `<div class="trap-flag">⚠️ ${f}</div>`).join('')}</div>`;
