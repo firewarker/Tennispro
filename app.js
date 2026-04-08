@@ -238,39 +238,54 @@ const TP = (() => {
   function tachSVG(score) {
     const s = cl(+score, 0, 100);
     const color = s >= 70 ? '#34d399' : s >= 50 ? '#f59e0b' : s >= 30 ? '#f97316' : '#f87171';
-    // Semi-circle from left to right: angles in degrees from 180 (left) to 0 (right)
-    const cx = 100, cy = 95, radius = 70;
-    // Needle angle: 180deg = score 0 (left), 0deg = score 100 (right)
-    const deg = 180 - (s / 100) * 180;
-    const rad = deg * Math.PI / 180;
-    const nx = cx + (radius - 15) * Math.cos(rad);
-    const ny = cy - (radius - 15) * Math.sin(rad);
-    // Arc fill endpoint
-    const fillRad = deg * Math.PI / 180;
-    const fx = cx + radius * Math.cos(fillRad);
-    const fy = cy - radius * Math.sin(fillRad);
-    const largeArc = s > 50 ? 1 : 0;
-    // Background arc: full semicircle from left to right
-    const bgStartX = cx - radius, bgEndX = cx + radius;
+    // Semicircle gauge: center bottom, sweeps from left to right
+    // Using stroke-dasharray technique for clean arcs
+    const R = 65; // radius
+    const cx = 100, cy = 90;
+    const circumference = Math.PI * R; // half circle length
+    const filled = (s / 100) * circumference;
+    // Needle: rotate from -180 (left, score=0) to 0 (right, score=100)
+    const needleDeg = -180 + (s / 100) * 180;
+    const needleLen = R - 12;
+    const nRad = needleDeg * Math.PI / 180;
+    const nx = cx + needleLen * Math.cos(nRad);
+    const ny = cy + needleLen * Math.sin(nRad);
     return `<svg viewBox="0 0 200 110" class="tach-svg">
-      <defs>
-        <linearGradient id="tgr" x1="0%" y1="0%" x2="100%" y2="0%">
-          <stop offset="0%" stop-color="#f87171"/>
-          <stop offset="35%" stop-color="#f97316"/>
-          <stop offset="65%" stop-color="#f59e0b"/>
-          <stop offset="100%" stop-color="#34d399"/>
-        </linearGradient>
-      </defs>
       <!-- Background arc -->
-      <path d="M ${bgStartX} ${cy} A ${radius} ${radius} 0 0 1 ${bgEndX} ${cy}" fill="none" stroke="rgba(148,163,184,0.12)" stroke-width="12" stroke-linecap="round"/>
-      <!-- Colored fill arc -->
-      <path d="M ${bgStartX} ${cy} A ${radius} ${radius} 0 ${largeArc} 1 ${fx.toFixed(1)} ${fy.toFixed(1)}" fill="none" stroke="url(#tgr)" stroke-width="12" stroke-linecap="round"/>
+      <path d="M ${cx - R} ${cy} A ${R} ${R} 0 0 1 ${cx + R} ${cy}" 
+        fill="none" stroke="rgba(148,163,184,0.15)" stroke-width="14" stroke-linecap="round"/>
+      <!-- Red segment 0-30% -->
+      <path d="M ${cx - R} ${cy} A ${R} ${R} 0 0 1 ${cx + R} ${cy}" 
+        fill="none" stroke="#f87171" stroke-width="14" stroke-linecap="round"
+        stroke-dasharray="${circumference * 0.30} ${circumference}" opacity="0.6"/>
+      <!-- Orange segment 30-50% -->
+      <path d="M ${cx - R} ${cy} A ${R} ${R} 0 0 1 ${cx + R} ${cy}" 
+        fill="none" stroke="#f97316" stroke-width="14" stroke-linecap="round"
+        stroke-dasharray="${circumference * 0.20} ${circumference}" stroke-dashoffset="-${circumference * 0.30}" opacity="0.5"/>
+      <!-- Yellow segment 50-70% -->
+      <path d="M ${cx - R} ${cy} A ${R} ${R} 0 0 1 ${cx + R} ${cy}" 
+        fill="none" stroke="#f59e0b" stroke-width="14" stroke-linecap="round"
+        stroke-dasharray="${circumference * 0.20} ${circumference}" stroke-dashoffset="-${circumference * 0.50}" opacity="0.5"/>
+      <!-- Green segment 70-100% -->
+      <path d="M ${cx - R} ${cy} A ${R} ${R} 0 0 1 ${cx + R} ${cy}" 
+        fill="none" stroke="#34d399" stroke-width="14" stroke-linecap="round"
+        stroke-dasharray="${circumference * 0.30} ${circumference}" stroke-dashoffset="-${circumference * 0.70}" opacity="0.5"/>
+      <!-- Active fill (bright) -->
+      <path d="M ${cx - R} ${cy} A ${R} ${R} 0 0 1 ${cx + R} ${cy}" 
+        fill="none" stroke="${color}" stroke-width="14" stroke-linecap="round"
+        stroke-dasharray="${filled.toFixed(1)} ${circumference.toFixed(1)}"/>
       <!-- Needle -->
-      <line x1="${cx}" y1="${cy}" x2="${nx.toFixed(1)}" y2="${ny.toFixed(1)}" stroke="${color}" stroke-width="3" stroke-linecap="round"/>
-      <circle cx="${cx}" cy="${cy}" r="5" fill="${color}"/>
-      <!-- Score text -->
-      <text x="${cx}" y="${cy - 18}" text-anchor="middle" fill="${color}" font-size="28" font-weight="800" font-family="JetBrains Mono,monospace">${Math.round(s)}</text>
-      <text x="${cx}" y="${cy - 3}" text-anchor="middle" fill="#64748b" font-size="9" font-family="JetBrains Mono,monospace">/100</text>
+      <line x1="${cx}" y1="${cy}" x2="${nx.toFixed(1)}" y2="${ny.toFixed(1)}" 
+        stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+      <circle cx="${cx}" cy="${cy}" r="4" fill="white"/>
+      <!-- Score -->
+      <text x="${cx}" y="${cy - 22}" text-anchor="middle" fill="${color}" 
+        font-size="30" font-weight="800" font-family="JetBrains Mono,monospace">${Math.round(s)}</text>
+      <text x="${cx}" y="${cy - 6}" text-anchor="middle" fill="#64748b" 
+        font-size="10" font-family="JetBrains Mono,monospace">/100</text>
+      <!-- Min/Max labels -->
+      <text x="${cx - R - 5}" y="${cy + 14}" text-anchor="middle" fill="#475569" font-size="8" font-family="JetBrains Mono,monospace">0</text>
+      <text x="${cx + R + 5}" y="${cy + 14}" text-anchor="middle" fill="#475569" font-size="8" font-family="JetBrains Mono,monospace">100</text>
     </svg>`;
   }
 
