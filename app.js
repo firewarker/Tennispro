@@ -1,12 +1,12 @@
 /**
- * TennisPro v7.0 — Firebase Persistence + Fixed Tachimeter + BettingPro Cards
+ * TennisPro v7.1 — Firebase + Advanced Engine v8
  * Predictions saved to Firebase on first generation, never recalculated
  */
 const TP = (() => {
   const CFG = {
     W: 'https://tennispro.lucalagan.workers.dev',
     LIVE_MS: 30000,
-    WTS: { elo: 0.15, surface: 0.12, form: 0.14, h2h: 0.10, dominance: 0.09, serve: 0.09, fatigue: 0.07, odds: 0.12, smartMoney: 0.12 },
+    WTS: { elo: 0.15, surface: 0.12, form: 0.14, h2h: 0.10, clutch: 0.09, serve: 0.09, fatigue: 0.07, odds: 0.12, smartMoney: 0.12 },
     GPS: { clay: 10.2, grass: 9.6, hard: 9.8, indoor: 9.7, unknown: 9.9 },
   };
   let S = {
@@ -162,44 +162,236 @@ const TP = (() => {
   // ══════════════════════════════════════════
   //  🧠 ENGINE (same as v6 but cleaner)
   // ══════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════
+  //  🧠 ENGINE v8 — Advanced Stats from Score Data
+  //  Tournament-Weighted Elo, Match Stats, Tiebreak, Momentum
+  // ══════════════════════════════════════════════════════════════
+
+  // ═══ MATCH STATS EXTRACTOR — derive stats from set scores ═══
+  function extractStats(results, pk) {
+    const clean = cleanResults(results);
+    let totalSetsWon = 0, totalSetsLost = 0, totalGamesWon = 0, totalGamesLost = 0;
+    let tiebreakWon = 0, tiebreakTotal = 0, decisiveSetsWon = 0, decisiveSetsTotal = 0;
+    let straightSetWins = 0, totalWins = 0, matchCount = 0;
+    let setsPlayed = 0, holdRate = 0, holdSets = 0;
+    let oppQuality = []; // track opponent ranking when available
+
+    clean.slice(0, 15).forEach((m, mi) => {
+      if (!m.scores || !m.scores.length) return;
+      matchCount++;
+      const isP1 = String(m.first_player_key) === String(pk);
+      const won = iW(m, pk);
+      if (won === true) totalWins++;
+
+      let setsW = 0, setsL = 0;
+      m.scores.forEach(s => {
+        const gw = +(isP1 ? s.score_first : s.score_second) || 0;
+        const gl = +(isP1 ? s.score_second : s.score_first) || 0;
+        totalGamesWon += gw; totalGamesLost += gl;
+        setsPlayed++;
+
+        // Set won/lost
+        if (gw > gl) { setsW++; totalSetsWon++; } else { setsL++; totalSetsLost++; }
+
+        // Tiebreak detection (7-6 or 6-7)
+        if ((gw === 7 && gl === 6) || (gw === 6 && gl === 7)) {
+          tiebreakTotal++;
+          if (gw > gl) tiebreakWon++;
+        }
+
+        // Serve hold estimation: in a normal set, each player serves ~equal games
+        // If player won 6 games in a 6-4 set, they likely held most serves + broke once
+        if (gw + gl >= 6) {
+          const totalGames = gw + gl;
+          const serveGames = Math.ceil(totalGames / 2); // approx serve games
+          const expectedHolds = Math.round(gw * serveGames / totalGames);
+          holdRate += expectedHolds / Math.max(serveGames, 1);
+          holdSets++;
+        }
+      });
+
+      // Decisive set: 3rd set in Bo3, 5th set in Bo5
+      const totalSets = m.scores.length;
+      if (totalSets >= 3 && (totalSets === 3 || totalSets === 5)) {
+        const lastSet = m.scores[totalSets - 1];
+        const lwon = +(isP1 ? lastSet.score_first : lastSet.score_second) || 0;
+        const llost = +(isP1 ? lastSet.score_second : lastSet.score_first) || 0;
+        if (setsW > 0 && setsL > 0) { // it was a close match
+          decisiveSetsTotal++;
+          if (lwon > llost) decisiveSetsWon++;
+        }
+      }
+
+      // Straight set detection
+      if (won && setsL === 0) straightSetWins++;
+
+      // Opponent quality (check if opponent has a rank)
+      const oppName = isP1 ? (m.event_second_player || '') : (m.event_first_player || '');
+      const oppRank = getRank(oppName);
+      if (oppRank && mi < 8) oppQuality.push(oppRank);
+    });
+
+    return {
+      matchCount, totalWins, straightSetWins,
+      setsWon: totalSetsWon, setsLost: totalSetsLost,
+      gamesWon: totalGamesWon, gamesLost: totalGamesLost,
+      tiebreakWon, tiebreakTotal,
+      decisiveSetsWon, decisiveSetsTotal,
+      holdRate: holdSets > 0 ? holdRate / holdSets : 0.5,
+      holdSets, setsPlayed,
+      avgOppRank: oppQuality.length > 0 ? oppQuality.reduce((a, b) => a + b) / oppQuality.length : null,
+      oppCount: oppQuality.length,
+    };
+  }
+
+  // Tournament level multiplier for Elo K-factor
+  function tournamentLevel(name) {
+    const n = (name || '').toLowerCase();
+    if (/grand.slam|roland.garros|french.open|wimbledon|us.open|australian.open/i.test(n)) return 2.0;
+    if (/masters|monte.carlo|madrid|rome|roma|indian.wells|miami|shanghai|canada|cincinnati|paris.masters/i.test(n)) return 1.5;
+    if (/atp.500|500|queen|halle|barcelona|hamburg|vienna|beijing|tokyo/i.test(n)) return 1.2;
+    if (/atp.250|250/i.test(n)) return 1.0;
+    if (/challenger/i.test(n)) return 0.7;
+    if (/itf|futures/i.test(n)) return 0.5;
+    return 0.9;
+  }
+
   function runEngine(match, h2h, td) {
     const sf = dSurf(match.tournament_name || ''), bo5 = isSl(match.tournament_name || '');
     const rd = match.tournament_round || '';
+    // Extract advanced stats for both players
+    const stats1 = h2h ? extractStats(h2h.firstPlayerResults || [], match.first_player_key) : null;
+    const stats2 = h2h ? extractStats(h2h.secondPlayerResults || [], match.second_player_key) : null;
     const M = {};
-    M.elo = mElo(h2h, match); M.surface = mSurfM(h2h, match, sf); M.form = mForm(h2h, match);
-    M.h2h = mH2H(h2h, match); M.dominance = mDom(h2h, match); M.serve = mSrv(h2h, match);
-    M.fatigue = mFat(h2h, match, rd);
+    M.elo = mEloAdv(h2h, match);        // Tournament-weighted Elo
+    M.surface = mSurfM(h2h, match, sf);  // Same but with clean results
+    M.form = mFormAdv(h2h, match);       // Exponential decay + momentum
+    M.h2h = mH2H(h2h, match);           // Same but retirement-safe
+    M.clutch = mClutch(stats1, stats2);  // NEW: Tiebreak + Decisive sets
+    M.serve = mSrvAdv(stats1, stats2);   // Improved from match stats
+    M.fatigue = mFat(h2h, match, rd);    // With round pressure
     M.odds = td && td.h2h ? mOddsTD(td) : { name: 'Quote', icon: '💰', p1: 50, conf: 0, det: 'N/D', p1O: null, p2O: null, bks: [] };
     M.smartMoney = td && td.bookmakers && td.bookmakers.length >= 2 ? mSmartTD(td, M) : { name: 'Smart Money', icon: '🧠', p1: 50, conf: 0, det: 'N/D', signal: null };
     // Inject real rankings
     const r1 = getRank(match.event_first_player), r2 = getRank(match.event_second_player);
     if (r1 && r2) { const rdiff = r2 - r1; const rp = cl(50 + rdiff * 0.3, 10, 90); if (M.elo.conf > 0) { M.elo.p1 = M.elo.p1 * 0.7 + rp * 0.3; M.elo.conf = Math.min(M.elo.conf + 20, 100); } else { M.elo.p1 = rp; M.elo.conf = Math.min(Math.abs(rdiff) * 1.5, 80); } M.elo.det += ` #${r1} vs #${r2}`; }
-    // 2. QUALIFICATION DISCOUNT — reduce confidence for qualifier matches
+    // Qualification discount
     const isQual = isQualMatch(match);
     if (isQual) { Object.values(M).forEach(m => { if (m.conf > 0) m.conf = Math.round(m.conf * 0.75); }); }
     const C = calcC(M);
-    // 3. ROUND IMPORTANCE — boost regression for big rounds
     const rw = roundWeight(rd);
     const R = calcR(M, C, rw);
     const T = calcT(M, C);
     const MK = calcMK(C, match, h2h, sf, bo5, M.odds, td);
-    return { M, C, R, T, MK, sf, bo5, dq: dQ(M), r1, r2, isQual, round: rd, rw };
+    return { M, C, R, T, MK, sf, bo5, dq: dQ(M), r1, r2, isQual, round: rd, rw, stats1, stats2 };
   }
 
-  // Models — all use cleanResults (no retirements)
-  function mElo(h, m) { const r = { name: 'Elo + Ranking', icon: '📐', p1: 50, conf: 0, det: '' }; if (!h) return r; const a = cleanResults(h.firstPlayerResults), b = cleanResults(h.secondPlayerResults); if (a.length < 2 && b.length < 2) return r; let e1 = 1500, e2 = 1500; a.slice(0, 12).reverse().forEach(x => { const w = iW(x, m.first_player_key); if (w === null) return; e1 += 32 * ((w ? 1 : 0) - 1 / (1 + Math.pow(10, (1500 - e1) / 400))); }); b.slice(0, 12).reverse().forEach(x => { const w = iW(x, m.second_player_key); if (w === null) return; e2 += 32 * ((w ? 1 : 0) - 1 / (1 + Math.pow(10, (1500 - e2) / 400))); }); const d = e1 - e2; r.p1 = cl(1 / (1 + Math.pow(10, -d / 400)) * 100, 5, 95); r.conf = Math.min(Math.abs(d) / 2.5, 100); r.det = `Elo ${e1.toFixed(0)} vs ${e2.toFixed(0)}`; return r; }
+  // ═══ MODEL 1: Tournament-Weighted Elo ═══
+  function mEloAdv(h, m) {
+    const r = { name: 'Elo + Ranking', icon: '📐', p1: 50, conf: 0, det: '' };
+    if (!h) return r;
+    const a = cleanResults(h.firstPlayerResults), b = cleanResults(h.secondPlayerResults);
+    if (a.length < 2 && b.length < 2) return r;
+    let e1 = 1500, e2 = 1500;
+    a.slice(0, 15).reverse().forEach(x => {
+      const w = iW(x, m.first_player_key); if (w === null) return;
+      const K = 32 * tournamentLevel(x.tournament_name || '');
+      e1 += K * ((w ? 1 : 0) - 1 / (1 + Math.pow(10, (1500 - e1) / 400)));
+    });
+    b.slice(0, 15).reverse().forEach(x => {
+      const w = iW(x, m.second_player_key); if (w === null) return;
+      const K = 32 * tournamentLevel(x.tournament_name || '');
+      e2 += K * ((w ? 1 : 0) - 1 / (1 + Math.pow(10, (1500 - e2) / 400)));
+    });
+    const d = e1 - e2;
+    r.p1 = cl(1 / (1 + Math.pow(10, -d / 400)) * 100, 5, 95);
+    r.conf = Math.min(Math.abs(d) / 2, 100);
+    r.det = `Elo ${e1.toFixed(0)} vs ${e2.toFixed(0)}`;
+    return r;
+  }
+
+  // ═══ MODEL 2: Surface (unchanged but with cleanResults) ═══
   function mSurfM(h, m, sf) { const r = { name: 'Superficie', icon: '🏟️', p1: 50, conf: 0, det: '' }; if (!h || sf === 'unknown') return r; const s1 = swCl(cleanResults(h.firstPlayerResults), m.first_player_key, sf), s2 = swCl(cleanResults(h.secondPlayerResults), m.second_player_key, sf); const r1 = s1.w / Math.max(s1.t, 1), r2 = s2.w / Math.max(s2.t, 1); r.p1 = cl(50 + (r1 - r2) * 55, 8, 92); r.conf = Math.min((s1.t + s2.t) * 7, 100); r.det = `${(r1 * 100).toFixed(0)}% vs ${(r2 * 100).toFixed(0)}%`; return r; }
   function swCl(res, pk, sf) { let w = 0, t = 0; res.slice(0, 15).forEach(m => { const won = iW(m, pk); if (won === null) return; if (dSurf(m.tournament_name || '') === sf) { t++; if (won) w++; } }); return { w, t }; }
-  function mForm(h, m) { const r = { name: 'Forma', icon: '🔥', p1: 50, conf: 0, det: '', s1: '', s2: '' }; if (!h) return r; const f1 = wfCl(cleanResults(h.firstPlayerResults), m.first_player_key), f2 = wfCl(cleanResults(h.secondPlayerResults), m.second_player_key); r.p1 = cl(50 + (f1.sc - f2.sc) * 28, 6, 94); r.conf = Math.min((f1.n + f2.n) * 9, 100); r.det = `${(f1.sc * 100).toFixed(0)}% vs ${(f2.sc * 100).toFixed(0)}%`; r.s1 = f1.str; r.s2 = f2.str; return r; }
-  function wfCl(res, pk) { const l = res.slice(0, 8); if (!l.length) return { sc: 0.5, str: '-', n: 0 }; let ws = 0, wt = 0, sk = 0, st = null; l.forEach((m, i) => { const w = 1 - i * 0.1, won = iW(m, pk); if (won === null) return; ws += won ? w : 0; wt += w; if (st === null) { st = won; sk = 1; } else if (won === st) sk++; }); return { sc: wt > 0 ? ws / wt : 0.5, str: st === true ? `${sk}W🟢` : st === false ? `${sk}L🔴` : '-', n: l.length }; }
+
+  // ═══ MODEL 3: Form — Exponential Decay + Momentum ═══
+  function mFormAdv(h, m) {
+    const r = { name: 'Forma', icon: '🔥', p1: 50, conf: 0, det: '', s1: '', s2: '' };
+    if (!h) return r;
+    const f1 = formExp(cleanResults(h.firstPlayerResults), m.first_player_key, m.event_date);
+    const f2 = formExp(cleanResults(h.secondPlayerResults), m.second_player_key, m.event_date);
+    r.p1 = cl(50 + (f1.sc - f2.sc) * 32, 6, 94);
+    r.conf = Math.min((f1.n + f2.n) * 8, 100);
+    r.det = `${(f1.sc * 100).toFixed(0)}% vs ${(f2.sc * 100).toFixed(0)}%`;
+    r.s1 = f1.str; r.s2 = f2.str;
+    return r;
+  }
+  function formExp(res, pk, matchDate) {
+    const l = res.slice(0, 10);
+    if (!l.length) return { sc: 0.5, str: '-', n: 0 };
+    const now = new Date(matchDate || new Date());
+    let ws = 0, wt = 0, sk = 0, st = null;
+    l.forEach(m => {
+      const won = iW(m, pk); if (won === null) return;
+      // Exponential decay based on days ago
+      const daysAgo = Math.max(0, Math.floor((now - new Date(m.event_date || now)) / 86400000));
+      const decay = Math.exp(-daysAgo / 30); // Half-life ~21 days
+      // Tournament weight bonus
+      const tw = tournamentLevel(m.tournament_name || '') * 0.3 + 0.7;
+      const weight = decay * tw;
+      ws += won ? weight : 0;
+      wt += weight;
+      if (st === null) { st = won; sk = 1; } else if (won === st) sk++;
+    });
+    return { sc: wt > 0 ? ws / wt : 0.5, str: st === true ? `${sk}W🟢` : st === false ? `${sk}L🔴` : '-', n: l.length };
+  }
+
+  // ═══ MODEL 4: H2H (retirement-safe) ═══
   function mH2H(h, m) { const r = { name: 'H2H', icon: '⚔️', p1: 50, conf: 0, det: '', w1: 0, w2: 0 }; if (!h || !h.H2H || !h.H2H.length) return r; let w1 = 0, w2 = 0; h.H2H.filter(x => !isRet(x)).forEach(x => { const won = iW(x, m.first_player_key); if (won === true) w1++; else if (won === false) w2++; }); const tot = w1 + w2; if (!tot) return r; r.p1 = cl((w1 / tot) * 100, 8, 92); r.conf = Math.min(tot * 18, 100); r.det = `${w1}-${w2}`; r.w1 = w1; r.w2 = w2; return r; }
-  function mDom(h, m) { const r = { name: 'Dominio', icon: '💪', p1: 50, conf: 0, det: '' }; if (!h) return r; const d1 = cdomCl(cleanResults(h.firstPlayerResults), m.first_player_key), d2 = cdomCl(cleanResults(h.secondPlayerResults), m.second_player_key); if (!d1.n && !d2.n) return r; r.p1 = cl(50 + (d1.idx - d2.idx) * 20, 10, 90); r.conf = Math.min((d1.n + d2.n) * 8, 100); r.det = `${d1.str}/${d1.n} vs ${d2.str}/${d2.n}`; return r; }
-  function cdomCl(res, pk) { let tm = 0, str = 0, n = 0; res.slice(0, 8).forEach(m => { if (!m.scores) return; const won = iW(m, pk); if (!won) return; n++; const f = String(m.first_player_key) === String(pk); let gw = 0, gl = 0; m.scores.forEach(s => { gw += +(f ? s.score_first : s.score_second) || 0; gl += +(f ? s.score_second : s.score_first) || 0; }); tm += gw - gl; if (m.scores.filter(s => (+(f ? s.score_first : s.score_second) || 0) > (+(f ? s.score_second : s.score_first) || 0)).length === m.scores.length) str++; }); return { idx: cl(n > 0 ? tm / n / 5 : 0, -1, 1), str, n }; }
-  function mSrv(h, m) { const r = { name: 'Servizio', icon: '🎯', p1: 50, conf: 0, det: '' }; if (!h) return r; const s1 = cseCl(cleanResults(h.firstPlayerResults), m.first_player_key), s2 = cseCl(cleanResults(h.secondPlayerResults), m.second_player_key); if (!s1.n && !s2.n) return r; r.p1 = cl(50 + (s1.e - s2.e) * 35, 10, 90); r.conf = Math.min((s1.n + s2.n) * 7, 100); r.det = `${(s1.e * 100).toFixed(0)}% vs ${(s2.e * 100).toFixed(0)}%`; return r; }
-  function cseCl(res, pk) { let ts = 0, hr = 0; res.slice(0, 8).forEach(m => { if (!m.scores) return; const f = String(m.first_player_key) === String(pk); m.scores.forEach(s => { const w = +(f ? s.score_first : s.score_second) || 0, l = +(f ? s.score_second : s.score_first) || 0; if (w + l < 6) return; hr += Math.min(w / Math.ceil((w + l) / 2), 1); ts++; }); }); return { e: ts > 0 ? hr / ts : 0.5, n: ts }; }
-  // Fatigue now includes round pressure
+
+  // ═══ MODEL 5: Clutch — Tiebreak + Decisive Sets ═══ (replaces Dominance)
+  function mClutch(s1, s2) {
+    const r = { name: 'Clutch', icon: '🧊', p1: 50, conf: 0, det: '' };
+    if (!s1 || !s2) return r;
+    // Tiebreak win rate
+    const tb1 = s1.tiebreakTotal > 0 ? s1.tiebreakWon / s1.tiebreakTotal : 0.5;
+    const tb2 = s2.tiebreakTotal > 0 ? s2.tiebreakWon / s2.tiebreakTotal : 0.5;
+    // Decisive set win rate
+    const ds1 = s1.decisiveSetsTotal > 0 ? s1.decisiveSetsWon / s1.decisiveSetsTotal : 0.5;
+    const ds2 = s2.decisiveSetsTotal > 0 ? s2.decisiveSetsWon / s2.decisiveSetsTotal : 0.5;
+    // Blend: 55% tiebreak, 45% decisive sets
+    const c1 = tb1 * 0.55 + ds1 * 0.45;
+    const c2 = tb2 * 0.55 + ds2 * 0.45;
+    const totalData = s1.tiebreakTotal + s2.tiebreakTotal + s1.decisiveSetsTotal + s2.decisiveSetsTotal;
+    r.p1 = cl(50 + (c1 - c2) * 45, 10, 90);
+    r.conf = cl(totalData * 10, 0, 85);
+    r.det = `TB ${s1.tiebreakWon}/${s1.tiebreakTotal} vs ${s2.tiebreakWon}/${s2.tiebreakTotal}`;
+    return r;
+  }
+
+  // ═══ MODEL 6: Serve — Advanced from match stats ═══
+  function mSrvAdv(s1, s2) {
+    const r = { name: 'Servizio', icon: '🎯', p1: 50, conf: 0, det: '' };
+    if (!s1 || !s2 || !s1.holdSets || !s2.holdSets) return r;
+    // Serve hold rate from extracted stats
+    const h1 = s1.holdRate, h2 = s2.holdRate;
+    // Game win ratio (games won / total games)
+    const gwr1 = s1.gamesWon / Math.max(s1.gamesWon + s1.gamesLost, 1);
+    const gwr2 = s2.gamesWon / Math.max(s2.gamesWon + s2.gamesLost, 1);
+    // Blend hold rate (60%) + game win ratio (40%)
+    const srv1 = h1 * 0.6 + gwr1 * 0.4;
+    const srv2 = h2 * 0.6 + gwr2 * 0.4;
+    r.p1 = cl(50 + (srv1 - srv2) * 55, 10, 90);
+    r.conf = cl((s1.holdSets + s2.holdSets) * 5, 0, 90);
+    r.det = `Hold ${(h1 * 100).toFixed(0)}% vs ${(h2 * 100).toFixed(0)}%`;
+    return r;
+  }
+
+  // ═══ MODEL 7: Fatigue (with round pressure) ═══
   function mFat(h, m, round) { const r = { name: 'Fatica', icon: '🔋', p1: 50, conf: 0, det: '' }; if (!h) return r; const rp = roundPressure(round); const f1 = cfat(h.firstPlayerResults || [], m.event_date, rp), f2 = cfat(h.secondPlayerResults || [], m.event_date, rp); r.p1 = cl(50 + (f2.sc - f1.sc) * 8, 20, 80); r.conf = Math.min((f1.m + f2.m) * 10 + (rp > 0 ? 15 : 0), 80); r.det = `${f1.lb} vs ${f2.lb}${rp > 0 ? ' | ' + round.replace(/.*-\s*/, '').trim() : ''}`; return r; }
   function cfat(res, md, roundPr) { const t = new Date(md || new Date()); let m7 = 0, m3 = 0; res.slice(0, 10).forEach(m => { if (!m.event_date) return; const da = Math.floor((t - new Date(m.event_date)) / 86400000); if (da >= 0 && da <= 7) m7++; if (da >= 0 && da <= 3) m3++; }); const sc = m3 * 2 + m7 * 0.5 + (roundPr || 0); return { sc, m: m7, lb: sc >= 6 ? '🔴Stanco' : sc >= 3 ? '🟡Norm' : '🟢Fresco' }; }
+
+  // ═══ MODEL 8 + 9: Odds + Smart Money (unchanged) ═══
   function mOddsTD(td) { const r = { name: 'Quote', icon: '💰', p1: 50, conf: 0, det: '', p1O: null, p2O: null, bks: [] }; r.p1O = td.h2h.p1; r.p2O = td.h2h.p2; r.bks = td.bookmakers || []; const i1 = 1 / td.h2h.p1, i2 = 1 / td.h2h.p2; r.p1 = (i1 / (i1 + i2)) * 100; r.conf = cl((i1 + i2 - 1) * 200 + 40, 20, 95); r.det = `${td.h2h.p1.toFixed(2)} / ${td.h2h.p2.toFixed(2)} (${td.count} book)`; return r; }
   function mSmartTD(td, M) { const r = { name: 'Smart Money', icon: '🧠', p1: 50, conf: 0, det: '', signal: null }; const ps = td.bookmakers.map(b => (1 / b.p1) / (1 / b.p1 + 1 / b.p2) * 100); const avg = ps.reduce((a, b) => a + b) / ps.length; const sp = Math.max(...ps) - Math.min(...ps); r.p1 = cl(avg, 8, 92); r.conf = cl(90 - sp * 2.5, 15, 92); const of = M.elo.p1 >= 50 ? 'P1' : 'P2'; const mf = avg >= 50 ? 'P1' : 'P2'; r.signal = of === mf && sp < 6 ? 'CONFERMA' : of !== mf ? 'DIVERGENZA' : 'NEUTRO'; r.det = `${td.count} book, spread ${sp.toFixed(1)}%`; return r; }
 
