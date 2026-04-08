@@ -237,26 +237,40 @@ const TP = (() => {
   // ══════════════════════════════════════════
   function tachSVG(score) {
     const s = cl(+score, 0, 100);
-    // Angle: 0 = left (low), 180 = right (high). Needle sweeps from -180deg to 0deg
-    const startAngle = Math.PI; // 180 degrees (left)
-    const endAngle = 0; // 0 degrees (right)
-    const needleAngle = startAngle - (s / 100) * Math.PI;
-    const nx = 100 + 55 * Math.cos(needleAngle);
-    const ny = 100 - 55 * Math.sin(needleAngle);
     const color = s >= 70 ? '#34d399' : s >= 50 ? '#f59e0b' : s >= 30 ? '#f97316' : '#f87171';
-    // Arc for filled portion
-    const fillAngle = startAngle - (s / 100) * Math.PI;
-    const arcX = 100 + 75 * Math.cos(fillAngle);
-    const arcY = 100 - 75 * Math.sin(fillAngle);
+    // Semi-circle from left to right: angles in degrees from 180 (left) to 0 (right)
+    const cx = 100, cy = 95, radius = 70;
+    // Needle angle: 180deg = score 0 (left), 0deg = score 100 (right)
+    const deg = 180 - (s / 100) * 180;
+    const rad = deg * Math.PI / 180;
+    const nx = cx + (radius - 15) * Math.cos(rad);
+    const ny = cy - (radius - 15) * Math.sin(rad);
+    // Arc fill endpoint
+    const fillRad = deg * Math.PI / 180;
+    const fx = cx + radius * Math.cos(fillRad);
+    const fy = cy - radius * Math.sin(fillRad);
     const largeArc = s > 50 ? 1 : 0;
-    return `<svg viewBox="0 0 200 115" class="tach-svg">
-      <defs><linearGradient id="tg" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#f87171"/><stop offset="33%" stop-color="#f97316"/><stop offset="66%" stop-color="#f59e0b"/><stop offset="100%" stop-color="#34d399"/></linearGradient></defs>
-      <path d="M 25 100 A 75 75 0 0 1 175 100" fill="none" stroke="rgba(148,163,184,0.1)" stroke-width="10" stroke-linecap="round"/>
-      <path d="M 25 100 A 75 75 0 ${largeArc} 1 ${arcX.toFixed(1)} ${arcY.toFixed(1)}" fill="none" stroke="url(#tg)" stroke-width="10" stroke-linecap="round"/>
-      <line x1="100" y1="100" x2="${nx.toFixed(1)}" y2="${ny.toFixed(1)}" stroke="${color}" stroke-width="3" stroke-linecap="round"/>
-      <circle cx="100" cy="100" r="4" fill="${color}"/>
-      <text x="100" y="82" text-anchor="middle" fill="${color}" font-size="26" font-weight="800" font-family="JetBrains Mono,monospace">${s.toFixed ? (+s).toFixed(0) : s}</text>
-      <text x="100" y="96" text-anchor="middle" fill="#64748b" font-size="9" font-family="JetBrains Mono,monospace">/100</text>
+    // Background arc: full semicircle from left to right
+    const bgStartX = cx - radius, bgEndX = cx + radius;
+    return `<svg viewBox="0 0 200 110" class="tach-svg">
+      <defs>
+        <linearGradient id="tgr" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="#f87171"/>
+          <stop offset="35%" stop-color="#f97316"/>
+          <stop offset="65%" stop-color="#f59e0b"/>
+          <stop offset="100%" stop-color="#34d399"/>
+        </linearGradient>
+      </defs>
+      <!-- Background arc -->
+      <path d="M ${bgStartX} ${cy} A ${radius} ${radius} 0 0 1 ${bgEndX} ${cy}" fill="none" stroke="rgba(148,163,184,0.12)" stroke-width="12" stroke-linecap="round"/>
+      <!-- Colored fill arc -->
+      <path d="M ${bgStartX} ${cy} A ${radius} ${radius} 0 ${largeArc} 1 ${fx.toFixed(1)} ${fy.toFixed(1)}" fill="none" stroke="url(#tgr)" stroke-width="12" stroke-linecap="round"/>
+      <!-- Needle -->
+      <line x1="${cx}" y1="${cy}" x2="${nx.toFixed(1)}" y2="${ny.toFixed(1)}" stroke="${color}" stroke-width="3" stroke-linecap="round"/>
+      <circle cx="${cx}" cy="${cy}" r="5" fill="${color}"/>
+      <!-- Score text -->
+      <text x="${cx}" y="${cy - 18}" text-anchor="middle" fill="${color}" font-size="28" font-weight="800" font-family="JetBrains Mono,monospace">${Math.round(s)}</text>
+      <text x="${cx}" y="${cy - 3}" text-anchor="middle" fill="#64748b" font-size="9" font-family="JetBrains Mono,monospace">/100</text>
     </svg>`;
   }
 
