@@ -602,7 +602,7 @@ const TP = (() => {
     const reasons = [];
     const activeM = C.bd.filter(b => b.active).sort((a, b) => Math.abs(b.p1 - 50) - Math.abs(a.p1 - 50));
     activeM.slice(0, 3).forEach(b => {
-      const favors = b.p1 >= 50 ? fav.split(' ').pop() : unfav.split(' ').pop();
+      const favors = b.p1 >= 50 ? p1.split(' ').pop() : p2.split(' ').pop();
       const str = Math.abs(b.p1 - 50) > 20 ? '✅' : Math.abs(b.p1 - 50) > 8 ? '🟡' : '⚪';
       reasons.push(`${str} ${M[b.k]?.icon || ''} ${b.name}: favorisce ${favors} (${Math.round(Math.max(b.p1, 100 - b.p1))}%)`);
     });
