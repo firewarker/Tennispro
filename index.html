@@ -6,11 +6,23 @@
   <title>TennisPro — Analisi Pronostici Tennis</title>
   <link rel="stylesheet" href="style.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎾</text></svg>">
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+  <script>
+    firebase.initializeApp({
+      databaseURL: "https://tennispro-c13f9-default-rtdb.europe-west1.firebasedatabase.app"
+    });
+    const DB = firebase.database();
+  </script>
 </head>
 <body>
   <header class="header"><div class="header-inner">
     <a href="#" class="logo" onclick="TP.goHome();return false"><div class="logo-icon">🎾</div><div class="logo-text">Tennis<span>Pro</span></div></a>
-    <div class="header-date" id="headerDate"></div>
+    <div class="header-right">
+      <span class="api-status" id="apiStatus">● DB</span>
+      <div class="header-date" id="headerDate"></div>
+    </div>
   </div></header>
 
   <nav class="nav-tabs">
@@ -21,9 +33,7 @@
   </nav>
 
   <main class="main">
-    <!-- HOME -->
     <section class="tab-content active" id="tab-matches">
-      <!-- Top Picks -->
       <div id="topPicksContainer" style="display:none"></div>
       <div class="section-header">
         <h2 class="section-title"><span class="icon">📊</span> Pronostici del Giorno</h2>
@@ -44,10 +54,8 @@
       <div id="tournamentsContainer"><div class="loading-state"><div class="loading-spinner"></div><p>Caricamento...</p></div></div>
     </section>
 
-    <!-- ANALYSIS PAGE -->
     <section class="tab-content" id="tab-analysis"><div id="analysisPage"></div></section>
 
-    <!-- LIVE -->
     <section class="tab-content" id="tab-live">
       <div class="section-header"><h2 class="section-title"><span class="icon">⚡</span> Live Score</h2>
         <div class="filter-bar"><button class="filter-btn active" data-live-filter="all">Tutti</button><button class="filter-btn" data-live-filter="atp">ATP</button><button class="filter-btn" data-live-filter="wta">WTA</button></div>
@@ -55,15 +63,12 @@
       <div id="liveContainer"><div class="loading-state"><div class="loading-spinner"></div></div></div>
     </section>
 
-    <!-- BANKROLL -->
     <section class="tab-content" id="tab-bankroll">
       <div class="section-header"><h2 class="section-title"><span class="icon">💰</span> Bankroll Manager</h2></div>
       <div id="bankrollDashboard"></div>
-      <div class="section-header" style="margin-top:1.5rem"><h2 class="section-title" style="font-size:1rem">📋 Storico Scommesse</h2></div>
       <div id="bankrollHistory"></div>
     </section>
 
-    <!-- RANKINGS -->
     <section class="tab-content" id="tab-rankings">
       <div class="section-header"><h2 class="section-title"><span class="icon">🏆</span> Classifiche</h2>
         <div class="filter-bar"><button class="filter-btn active" data-ranking="atp">ATP</button><button class="filter-btn" data-ranking="wta">WTA</button></div>
@@ -73,7 +78,7 @@
   </main>
 
   <footer style="text-align:center;padding:2rem;color:var(--text-dim);font-size:0.72rem;border-top:1px solid var(--border)">
-    <p>TennisPro v6.0 — 9 Modelli + Rankings Reali + Bankroll Manager + Smart Money</p>
+    <p>TennisPro v7.0 — Firebase + 9 Modelli + Pronostici Bloccati</p>
     <p style="margin-top:4px">© 2026 TennisPro · Solo scopo informativo</p>
   </footer>
   <script src="app.js"></script>
