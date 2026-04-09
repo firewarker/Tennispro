@@ -297,12 +297,19 @@ const TP = (() => {
     a.slice(0, 15).reverse().forEach(x => {
       const w = iW(x, m.first_player_key); if (w === null) return;
       const K = 32 * tournamentLevel(x.tournament_name || '');
-      e1 += K * ((w ? 1 : 0) - 1 / (1 + Math.pow(10, (1500 - e1) / 400)));
+      // Estimate opponent Elo from their rank if available
+      const oppName = String(x.first_player_key) === String(m.first_player_key) ? (x.event_second_player || '') : (x.event_first_player || '');
+      const oppRank = getRank(oppName);
+      const oppElo = oppRank ? cl(2100 - oppRank * 4, 1200, 2100) : 1500;
+      e1 += K * ((w ? 1 : 0) - 1 / (1 + Math.pow(10, (oppElo - e1) / 400)));
     });
     b.slice(0, 15).reverse().forEach(x => {
       const w = iW(x, m.second_player_key); if (w === null) return;
       const K = 32 * tournamentLevel(x.tournament_name || '');
-      e2 += K * ((w ? 1 : 0) - 1 / (1 + Math.pow(10, (1500 - e2) / 400)));
+      const oppName = String(x.first_player_key) === String(m.second_player_key) ? (x.event_second_player || '') : (x.event_first_player || '');
+      const oppRank = getRank(oppName);
+      const oppElo = oppRank ? cl(2100 - oppRank * 4, 1200, 2100) : 1500;
+      e2 += K * ((w ? 1 : 0) - 1 / (1 + Math.pow(10, (oppElo - e2) / 400)));
     });
     const d = e1 - e2;
     r.p1 = cl(1 / (1 + Math.pow(10, -d / 400)) * 100, 5, 95);
@@ -331,18 +338,21 @@ const TP = (() => {
     const l = res.slice(0, 10);
     if (!l.length) return { sc: 0.5, str: '-', n: 0 };
     const now = new Date(matchDate || new Date());
-    let ws = 0, wt = 0, sk = 0, st = null;
+    let ws = 0, wt = 0, sk = 0, st = null, streakBroken = false;
     l.forEach(m => {
       const won = iW(m, pk); if (won === null) return;
-      // Exponential decay based on days ago
       const daysAgo = Math.max(0, Math.floor((now - new Date(m.event_date || now)) / 86400000));
-      const decay = Math.exp(-daysAgo / 30); // Half-life ~21 days
-      // Tournament weight bonus
+      const decay = Math.exp(-daysAgo / 30);
       const tw = tournamentLevel(m.tournament_name || '') * 0.3 + 0.7;
       const weight = decay * tw;
       ws += won ? weight : 0;
       wt += weight;
-      if (st === null) { st = won; sk = 1; } else if (won === st) sk++;
+      // Streak: only count consecutive results from most recent
+      if (!streakBroken) {
+        if (st === null) { st = won; sk = 1; }
+        else if (won === st) sk++;
+        else streakBroken = true; // streak ends here
+      }
     });
     return { sc: wt > 0 ? ws / wt : 0.5, str: st === true ? `${sk}W🟢` : st === false ? `${sk}L🔴` : '-', n: l.length };
   }
@@ -443,8 +453,9 @@ const TP = (() => {
     // First Set
     const fsa = pw * 0.85 + 0.075;
     mk.firstSet = { pick: fsa >= 0.5 ? m.event_first_player : m.event_second_player, prob: (Math.max(fsa, 1 - fsa) * 100).toFixed(0) };
-    // Handicap
-    const sp = mk.sets.preds.filter(x => x.f === C.fav && (x.s === '2-0' || x.s === '3-0')).reduce((s, x) => s + +x.p, 0);
+    // Handicap — find straight set wins FOR the favorite
+    const straightScores = C.fav === 'P1' ? ['2-0', '3-0'] : ['0-2', '0-3'];
+    const sp = mk.sets.preds.filter(x => x.f === C.fav && straightScores.includes(x.s)).reduce((s, x) => s + +x.p, 0);
     mk.handicap = { favMinus: { label: `${fn} -1.5`, prob: sp.toFixed(0) }, undPlus: { label: `${mk.winner.vs} +1.5`, prob: (100 - sp).toFixed(0) } };
     return mk;
   }
